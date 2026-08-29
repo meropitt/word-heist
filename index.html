@@ -233,8 +233,8 @@ let supabaseReady = false;
 function tryInitSupabase(){
   if(supabaseReady) return true;
   try{
-    if(SUPABASE_URL !== "YOUR_SUPABASE_URL" &&
-       SUPABASE_ANON_KEY !== "YOUR_SUPABASE_ANON_KEY" &&
+    if(SUPABASE_URL !== "https://fttdyfyuzlyhgjudcefd.supabase.co" &&
+       SUPABASE_ANON_KEY !== "sb_publishable_IHJz931f_p6eyWMLpJHong_bHvZ0aqI" &&
        window.supabase && typeof window.supabase.createClient === 'function'){
       supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
       supabaseReady = true;
