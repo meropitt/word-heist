@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600;700&family=Share+Tech+Mono&display=swap" rel="stylesheet">
-<script defer src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2" onload="window.__supabaseLibLoaded && window.__supabaseLibLoaded()"></script>
 <style>
   :root{
     --void: #05070d;
@@ -224,17 +224,40 @@
    SUPABASE CONFIG — fill these in before deploying
    Get them from: Supabase project → Settings → API
    ============================================================ */
-const SUPABASE_URL = "https://fttdyfyuzlyhgjudcefd.supabase.co"; // e.g. https://xxxxx.supabase.co
+const SUPABASE_URL = "https://fttdyfyuzlyhgjudcefd.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_IHJz931f_p6eyWMLpJHong_bHvZ0aqI";
 
 let supabase = null;
 let supabaseReady = false;
-try{
-  if(SUPABASE_URL !== "YOUR_SUPABASE_URL" && SUPABASE_ANON_KEY !== "YOUR_SUPABASE_ANON_KEY"){
-    supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-    supabaseReady = true;
+
+function tryInitSupabase(){
+  if(supabaseReady) return true;
+  try{
+    if(SUPABASE_URL !== "YOUR_SUPABASE_URL" &&
+       SUPABASE_ANON_KEY !== "YOUR_SUPABASE_ANON_KEY" &&
+       window.supabase && typeof window.supabase.createClient === 'function'){
+      supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+      supabaseReady = true;
+      return true;
+    }
+  }catch(e){ console.error('Supabase init failed', e); }
+  return false;
+}
+
+/* Called automatically once the Supabase library finishes downloading,
+   however long that takes on a slow connection. */
+window.__supabaseLibLoaded = function(){
+  if(tryInitSupabase()){
+    // If the leaderboard warning or welcome screen is already on screen,
+    // refresh it now that the connection is actually ready.
+    if(typeof render === 'function' && (state.screen === 'welcome' || state.screen === 'leaderboard')){
+      render();
+    }
   }
-}catch(e){ console.error('Supabase init failed', e); }
+};
+
+/* Try immediately too, in case the library was already cached/fast. */
+tryInitSupabase();
 
 /* ============================================================
    QUESTION BANK — fast, punchy English challenges
