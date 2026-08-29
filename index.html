@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600;700&family=Share+Tech+Mono&display=swap" rel="stylesheet">
-<script defer src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2" onload="window.__supabaseLibLoaded && window.__supabaseLibLoaded()"></script>
+<script src="supabase.js" onload="window.__supabaseLibLoaded && window.__supabaseLibLoaded()"></script>
 <style>
   :root{
     --void: #05070d;
@@ -227,7 +227,7 @@
 const SUPABASE_URL = "https://fttdyfyuzlyhgjudcefd.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_IHJz931f_p6eyWMLpJHong_bHvZ0aqI";
 
-let supabase = null;
+let supabaseClient = null;
 let supabaseReady = false;
 
 function tryInitSupabase(){
@@ -236,7 +236,7 @@ function tryInitSupabase(){
     if(SUPABASE_URL !== "YOUR_SUPABASE_URL" &&
        SUPABASE_ANON_KEY !== "YOUR_SUPABASE_ANON_KEY" &&
        window.supabase && typeof window.supabase.createClient === 'function'){
-      supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+      supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
       supabaseReady = true;
       return true;
     }
@@ -526,14 +526,14 @@ function renderVault(){
 async function submitScore(){
   if(!supabaseReady) return;
   try{
-    const { data: existing } = await supabase
+    const { data: existing } = await supabaseClient
       .from('leaderboard')
       .select('score')
       .eq('team_name', state.teamName)
       .maybeSingle();
 
     if(!existing || state.score > existing.score){
-      await supabase.from('leaderboard').upsert({
+      await supabaseClient.from('leaderboard').upsert({
         team_name: state.teamName,
         score: state.score,
         best_streak: state.bestStreak,
@@ -557,7 +557,7 @@ async function renderLeaderboard(){
   `;
   if(!supabaseReady) return;
   try{
-    const { data, error } = await supabase
+    const { data, error } = await supabaseClient
       .from('leaderboard')
       .select('team_name, score, best_streak')
       .order('score', { ascending: false })
