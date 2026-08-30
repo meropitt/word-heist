@@ -148,6 +148,25 @@
   .feedback.ok{ background: rgba(77,224,138,0.12); color: var(--ok); border:1px solid var(--ok); }
   .feedback.bad{ background: rgba(255,77,94,0.12); color: var(--danger); border:1px solid var(--danger); }
 
+  .powerup-row{
+    display:flex; gap:8px; margin-bottom: 12px;
+  }
+  .pw-btn{
+    flex:1; font-family: var(--font-mono); font-size: 0.78rem;
+    background: #0a121e; border: 1.5px solid var(--gold); color: var(--gold);
+    border-radius: 6px; padding: 9px 6px; cursor:pointer;
+  }
+  .pw-btn:disabled{ opacity: 0.3; border-color: var(--steel); color: var(--text-dim); cursor:not-allowed; }
+  #freezeOverlay:not(:empty){
+    position: fixed; inset:0; background: rgba(5,7,13,0.92);
+    display:flex; align-items:center; justify-content:center; z-index: 20; padding: 20px;
+  }
+  .freeze-modal{
+    background: var(--panel); border: 1.5px solid var(--neon-cyan); border-radius: 10px;
+    padding: 18px; max-width: 400px; width:100%;
+  }
+  .freeze-modal .mc-option{ margin-bottom: 8px; }
+
   .round-track{
     display:flex; gap:4px; margin-bottom: 14px; flex-wrap:wrap;
   }
@@ -298,6 +317,10 @@ let state = {
   score: 0,
   streak: 0,
   bestStreak: 0,
+  freezeCharges: 0,
+  doubleCharges: 0,
+  doubleActive: false,
+  frozenMsRemaining: 0,
   roundIndex: 0,
   rounds: [],          // shuffled + sliced question set for this run
   roundResults: [],    // 'correct' | 'wrong' per round
@@ -388,13 +411,14 @@ function multiplierFor(streak){
 
 function renderPlay(){
   const q = state.rounds[state.roundIndex];
-  const mult = multiplierFor(state.streak);
+  const mult = multiplierFor(state.streak) * (state.doubleActive ? 2 : 1);
   app.innerHTML = `
     <div class="team-tag">${escapeHtml(state.teamName)} · Round ${state.roundIndex+1}/${TOTAL_ROUNDS}</div>
     <div class="hud">
       <span>SCORE <span class="score-num">${state.score}</span></span>
-      <span class="streak-flame ${state.streak>=4?'hot':''}">🔥 ${state.streak}<span class="multiplier-badge">x${mult}</span></span>
+      <span class="streak-flame ${state.streak>=4?'hot':''}">🔥 ${state.streak}<span class="multiplier-badge">x${mult}${state.doubleActive?' ⚡':''}</span></span>
     </div>
+    <div class="powerup-row" id="powerupRow"></div>
     <div class="round-track">
       ${state.rounds.map((_,i)=>{
         let cls = 'round-dot';
@@ -410,6 +434,7 @@ function renderPlay(){
       <h2>${q.q}</h2>
       <div id="options"></div>
     </div>
+    <div id="freezeOverlay"></div>
   `;
   const optsDiv = document.getElementById('options');
   q.opts.forEach((opt, idx) => {
@@ -419,7 +444,112 @@ function renderPlay(){
     b.onclick = () => answer(idx);
     optsDiv.appendChild(b);
   });
+  renderPowerupRow();
+  checkIncomingFreeze();
+}
+
+function renderPowerupRow(){
+  const row = document.getElementById('powerupRow');
+  if(!row) return;
+  row.innerHTML = `
+    <button class="pw-btn" id="freezeBtn" ${state.freezeCharges<1?'disabled':''}>🧊 Freeze ×${state.freezeCharges}</button>
+    <button class="pw-btn" id="doubleBtn" ${(state.doubleCharges<1||state.doubleActive)?'disabled':''}>⚡ 2x Points ×${state.doubleCharges}</button>
+  `;
+  const fb = document.getElementById('freezeBtn');
+  const db = document.getElementById('doubleBtn');
+  if(fb) fb.onclick = openFreezeTargetPicker;
+  if(db) db.onclick = useDoublePowerup;
+}
+
+function useDoublePowerup(){
+  if(state.doubleCharges < 1 || state.doubleActive) return;
+  state.doubleCharges -= 1;
+  state.doubleActive = true;
+  renderPowerupRow();
+  const mult = multiplierFor(state.streak) * 2;
+  const badge = document.querySelector('.multiplier-badge');
+  if(badge) badge.innerHTML = 'x' + mult + ' ⚡';
+}
+
+async function openFreezeTargetPicker(){
+  if(state.freezeCharges < 1) return;
+  if(!supabaseReady){
+    alert('Connect the leaderboard first to target another crew with Freeze.');
+    return;
+  }
+  const overlay = document.getElementById('freezeOverlay');
+  overlay.innerHTML = `<div class="freeze-modal"><p class="dim">Loading crews…</p></div>`;
+  try{
+    const { data } = await supabaseClient.from('leaderboard').select('team_name').neq('team_name', state.teamName).order('score', { ascending:false }).limit(10);
+    if(!data || !data.length){
+      overlay.innerHTML = `<div class="freeze-modal"><p class="dim">No other crews on the leaderboard yet.</p><button class="btn btn-ghost" onclick="closeFreezeModal()">Close</button></div>`;
+      return;
+    }
+    overlay.innerHTML = `
+      <div class="freeze-modal">
+        <p class="dim">🧊 Choose a crew to freeze for 10s:</p>
+        ${data.map(t => `<button class="mc-option" onclick="useFreezeOn('${escapeHtml(t.team_name).replace(/'/g,"\\'")}')">${escapeHtml(t.team_name)}</button>`).join('')}
+        <button class="btn btn-ghost" onclick="closeFreezeModal()">Cancel</button>
+      </div>
+    `;
+  }catch(e){
+    overlay.innerHTML = `<div class="freeze-modal"><p class="dim">Could not load crews.</p><button class="btn btn-ghost" onclick="closeFreezeModal()">Close</button></div>`;
+  }
+}
+
+function closeFreezeModal(){
+  const overlay = document.getElementById('freezeOverlay');
+  if(overlay) overlay.innerHTML = '';
+}
+
+async function useFreezeOn(targetTeam){
+  if(state.freezeCharges < 1) { closeFreezeModal(); return; }
+  try{
+    await supabaseClient.from('freezes').upsert({
+      team_name: targetTeam,
+      frozen_until: new Date(Date.now() + 10000).toISOString()
+    }, { onConflict: 'team_name' });
+    state.freezeCharges -= 1;
+    closeFreezeModal();
+    renderPowerupRow();
+  }catch(e){
+    console.error('freeze failed', e);
+    closeFreezeModal();
+  }
+}
+
+async function checkIncomingFreeze(){
+  if(!supabaseReady) { startTimer(); return; }
+  try{
+    const { data } = await supabaseClient.from('freezes').select('frozen_until').eq('team_name', state.teamName).maybeSingle();
+    if(data && data.frozen_until){
+      const remaining = new Date(data.frozen_until).getTime() - Date.now();
+      if(remaining > 300){
+        showFrozenOverlay(remaining);
+        return;
+      }
+    }
+  }catch(e){ /* table may not exist yet, or no row - just proceed */ }
   startTimer();
+}
+
+function showFrozenOverlay(ms){
+  const optsDiv = document.getElementById('options');
+  if(optsDiv) optsDiv.style.pointerEvents = 'none';
+  const overlay = document.getElementById('freezeOverlay');
+  let secondsLeft = Math.ceil(ms/1000);
+  overlay.innerHTML = `<div class="freeze-modal"><p style="color:var(--neon-cyan); text-align:center;">🧊 FROZEN by a rival crew!<br>Unlocking in <span id="freezeCountdown">${secondsLeft}</span>s…</p></div>`;
+  const iv = setInterval(() => {
+    secondsLeft -= 1;
+    const el = document.getElementById('freezeCountdown');
+    if(el) el.textContent = secondsLeft;
+    if(secondsLeft <= 0){
+      clearInterval(iv);
+      overlay.innerHTML = '';
+      if(optsDiv) optsDiv.style.pointerEvents = '';
+      startTimer();
+    }
+  }, 1000);
 }
 
 function startTimer(){
@@ -459,12 +589,26 @@ function answer(idx){
   if(correct){
     state.streak += 1;
     state.bestStreak = Math.max(state.bestStreak, state.streak);
-    const mult = multiplierFor(state.streak);
+    const usedDouble = state.doubleActive;
+    const mult = multiplierFor(state.streak) * (usedDouble ? 2 : 1);
     const pts = Math.round(10 * mult);
     state.score += pts;
     state.roundResults[state.roundIndex] = 'correct';
+    state.doubleActive = false;
+
+    let awardMsg = '';
+    if(state.streak > 0 && state.streak % 3 === 0){
+      if(state.streak % 6 === 0){
+        state.doubleCharges += 1;
+        awardMsg = ' 🎁 Earned a ⚡ 2x Points card!';
+      } else {
+        state.freezeCharges += 1;
+        awardMsg = ' 🎁 Earned a 🧊 Freeze card!';
+      }
+    }
+
     fb.className = 'feedback ok';
-    fb.textContent = `✓ Correct! +${pts} pts (x${mult} streak bonus)`;
+    fb.textContent = `✓ Correct! +${pts} pts (x${mult}${usedDouble?' incl. 2x':''} bonus)${awardMsg}`;
   } else {
     state.streak = 0;
     state.roundResults[state.roundIndex] = 'wrong';
