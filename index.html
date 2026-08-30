@@ -68,12 +68,12 @@
   p{ line-height:1.6; margin: 0 0 10px; color: var(--ink); font-size:0.95rem; }
   p.muted{ color: var(--muted); font-size: 0.85rem; }
 
-  input[type=text], input[type=password]{
+  input[type=text], input[type=password], select{
     width:100%; font-family: var(--font-body); font-size:1rem;
     padding: 12px 13px; border-radius: 8px; border: 1.5px solid var(--line);
     background: #fff; color: var(--ink); margin-bottom: 10px;
   }
-  input:focus{ outline:none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-dim); }
+  input:focus, select:focus{ outline:none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-dim); }
 
   .btn{
     font-family: var(--font-head); font-weight:700; font-size: 0.92rem;
@@ -104,9 +104,7 @@
   .team-row{
     display:flex; align-items:center; justify-content:space-between;
     padding: 12px; border: 1.5px solid var(--line); border-radius:10px; margin-bottom:8px;
-    cursor:pointer;
   }
-  .team-row:hover{ border-color: var(--accent); }
   .team-row-left{ display:flex; align-items:center; }
   .team-row .team-name{ font-weight:700; }
   .team-row .team-meta{ font-size:0.75rem; color:var(--muted); }
@@ -121,13 +119,6 @@
     width:30px; height:30px; border-radius:50%; cursor:pointer; border:3px solid transparent;
   }
   .color-dot.selected{ border-color: var(--ink); }
-
-  .member-grid{ display:grid; grid-template-columns: repeat(auto-fill, minmax(70px,1fr)); gap:8px; margin-bottom:12px; }
-  .member-btn{
-    padding: 14px 4px; border-radius:9px; border:1.5px solid var(--line); background:#fff;
-    font-family: var(--font-head); font-weight:700; cursor:pointer; text-align:center;
-  }
-  .member-btn:hover{ border-color: var(--accent); }
 
   .status-pill{
     display:inline-flex; align-items:center; gap:6px;
@@ -168,6 +159,28 @@
 
   .center-note{ text-align:center; color: var(--muted); font-size: 0.85rem; margin-top: 8px; }
   .divider{ height:1px; background:var(--line); margin: 14px 0; }
+
+  .game-track{ display:flex; gap:6px; margin-bottom:14px; }
+  .game-dot{
+    flex:1; height:8px; border-radius:4px; background: var(--line);
+  }
+  .game-dot.done{ background: var(--ok); }
+  .game-dot.active{ background: var(--accent); }
+
+  .scramble-word{
+    font-family: var(--font-head); font-size: 1.8rem; font-weight:800; letter-spacing:6px;
+    text-align:center; padding: 18px 0; color: var(--navy);
+  }
+
+  .student-row{
+    display:flex; align-items:center; justify-content:space-between;
+    padding:9px 0; border-bottom:1px dashed var(--line); font-size:0.88rem;
+  }
+  .student-row:last-child{ border-bottom:none; }
+  .code-chip{
+    font-family:monospace; font-weight:700; letter-spacing:1px; background:var(--accent-dim); color:var(--accent);
+    padding:2px 8px; border-radius:6px; font-size:0.82rem;
+  }
 </style>
 </head>
 <body>
@@ -184,9 +197,6 @@ const TEACHER_PASSWORD = "academy2026"; // ⚠ change this before sharing with s
 
 /* ============================================================
    MINIMAL SUPABASE REST CLIENT — no external library needed.
-   Talks directly to Supabase's REST API (PostgREST) with fetch().
-   Supports exactly the chain patterns this app uses:
-   .select().eq().neq().order().limit().maybeSingle() / insert / update().eq() / delete().eq()
    ============================================================ */
 function createMiniSupabase(url, key){
   const baseHeaders = {
@@ -194,7 +204,6 @@ function createMiniSupabase(url, key){
     Authorization: 'Bearer ' + key,
     'Content-Type': 'application/json'
   };
-
   async function doFetch(path, options){
     const res = await fetch(url + '/rest/v1/' + path, options);
     if(!res.ok){
@@ -205,12 +214,10 @@ function createMiniSupabase(url, key){
     const text = await res.text();
     return text ? JSON.parse(text) : null;
   }
-
   function from(table){
     let filters = [];
     let orderSpec = null;
     let limitSpec = null;
-
     function buildQuery(){
       const params = new URLSearchParams();
       filters.forEach(([col,op,val]) => params.append(col, op + '.' + val));
@@ -219,14 +226,12 @@ function createMiniSupabase(url, key){
       const qs = params.toString();
       return table + (qs ? ('?' + qs) : '');
     }
-
     async function runSelect(){
       try{
         const data = await doFetch(buildQuery(), { headers: baseHeaders });
         return { data: data || [] };
       }catch(e){ return { data: null, error: e }; }
     }
-
     const builder = {
       select(){ return builder; },
       eq(col, val){ filters.push([col, 'eq', val]); return builder; },
@@ -238,23 +243,17 @@ function createMiniSupabase(url, key){
         if(error) return { data: null, error };
         return { data: (data && data[0]) || null };
       },
-      then(resolve, reject){
-        runSelect().then(resolve, reject);
-      },
+      then(resolve, reject){ runSelect().then(resolve, reject); },
       insert: async (row) => {
-        try{
-          await doFetch(table, {
-            method: 'POST', headers: baseHeaders, body: JSON.stringify(row)
-          });
-          return {};
-        }catch(e){ return { error: e }; }
+        try{ await doFetch(table, { method:'POST', headers: baseHeaders, body: JSON.stringify(row) }); return {}; }
+        catch(e){ return { error: e }; }
       },
       upsert: async (row, opts) => {
         try{
           let path = table;
           if(opts && opts.onConflict) path += '?on_conflict=' + encodeURIComponent(opts.onConflict);
           const headers = Object.assign({}, baseHeaders, { Prefer: 'resolution=merge-duplicates' });
-          await doFetch(path, { method: 'POST', headers, body: JSON.stringify(row) });
+          await doFetch(path, { method:'POST', headers, body: JSON.stringify(row) });
           return {};
         }catch(e){ return { error: e }; }
       },
@@ -262,11 +261,8 @@ function createMiniSupabase(url, key){
         return {
           eq: async (col, val) => {
             try{
-              const params = new URLSearchParams();
-              params.append(col, 'eq.' + val);
-              await doFetch(table + '?' + params.toString(), {
-                method: 'PATCH', headers: baseHeaders, body: JSON.stringify(fields)
-              });
+              const params = new URLSearchParams(); params.append(col, 'eq.' + val);
+              await doFetch(table + '?' + params.toString(), { method:'PATCH', headers: baseHeaders, body: JSON.stringify(fields) });
               return {};
             }catch(e){ return { error: e }; }
           }
@@ -276,9 +272,8 @@ function createMiniSupabase(url, key){
         return {
           eq: async (col, val) => {
             try{
-              const params = new URLSearchParams();
-              params.append(col, 'eq.' + val);
-              await doFetch(table + '?' + params.toString(), { method: 'DELETE', headers: baseHeaders });
+              const params = new URLSearchParams(); params.append(col, 'eq.' + val);
+              await doFetch(table + '?' + params.toString(), { method:'DELETE', headers: baseHeaders });
               return {};
             }catch(e){ return { error: e }; }
           }
@@ -287,7 +282,6 @@ function createMiniSupabase(url, key){
     };
     return builder;
   }
-
   return { from };
 }
 
@@ -295,19 +289,16 @@ let supabaseClient = null;
 let supabaseReady = false;
 function tryInitSupabase(){
   if(supabaseReady) return true;
-  try{
-    supabaseClient = createMiniSupabase(SUPABASE_URL, SUPABASE_ANON_KEY);
-    supabaseReady = true;
-    return true;
-  }catch(e){ console.error('Supabase init failed', e); }
+  try{ supabaseClient = createMiniSupabase(SUPABASE_URL, SUPABASE_ANON_KEY); supabaseReady = true; return true; }
+  catch(e){ console.error('Supabase init failed', e); }
   return false;
 }
 tryInitSupabase();
 
 /* ============================================================
-   QUESTION BANK — rotates by day_index, 5 slots per day
+   QUESTION BANKS — three mini-games rotate through each day
    ============================================================ */
-const QUESTIONS = [
+const MCQ_BANK = [
   { q: "Choose the correct word: \"She ___ to the store every day.\"", opts: ["go","goes","going","gone"], correct: 1 },
   { q: "What is the synonym of \"happy\"?", opts: ["sad","joyful","angry","tired"], correct: 1 },
   { q: "Fix the sentence: \"He don't like coffee.\"", opts: ["He doesn't like coffee.","He not like coffee.","He no likes coffee.","He isn't like coffee."], correct: 0 },
@@ -322,68 +313,90 @@ const QUESTIONS = [
   { q: "What is the opposite of \"generous\"?", opts: ["kind","selfish","wealthy","friendly"], correct: 1 },
   { q: "Choose the correct word: \"By next year, I ___ my degree.\"", opts: ["will finish","will have finished","finished","am finishing"], correct: 1 },
   { q: "What does \"unmistakable\" mean?", opts: ["confusing","impossible to doubt","hidden","forgettable"], correct: 1 },
-  { q: "Fix the sentence: \"She more taller than him.\"", opts: ["She is more tall than him.","She is taller than him.","She taller than him.","She is tallest than him."], correct: 1 },
   { q: "What is the synonym of \"conclusion\"?", opts: ["question","outcome","mystery","beginning"], correct: 1 },
-  { q: "Choose the correct word: \"This book ___ by millions of people.\"", opts: ["read","reads","was read","reading"], correct: 2 },
-  { q: "What does \"inconsistent\" mean?", opts: ["always the same","not matching or steady","very careful","completely true"], correct: 1 },
-  { q: "What is the synonym of \"exhausted\"?", opts: ["energetic","tired","happy","angry"], correct: 1 },
-  { q: "Choose the correct word: \"I wish I ___ more time.\"", opts: ["have","had","having","has"], correct: 1 },
 ];
 
+const FILL_BANK = [
+  { prompt: "I usually ___ (drink) coffee in the morning.", answers: ["drink"] },
+  { prompt: "She ___ (be) a doctor for ten years.", answers: ["has been"] },
+  { prompt: "They ___ (not / like) horror movies.", answers: ["don't like","do not like"] },
+  { prompt: "If it rains, we ___ (stay) home.", answers: ["will stay","stay"] },
+  { prompt: "He is the ___ (tall) student in the class.", answers: ["tallest"] },
+  { prompt: "I wish I ___ (have) more free time.", answers: ["had"] },
+  { prompt: "This is the book ___ I told you about.", answers: ["that","which"] },
+  { prompt: "By the time we arrived, the movie ___ (already / start).", answers: ["had already started","already started"] },
+  { prompt: "She speaks English ___ (fluent).", answers: ["fluently"] },
+  { prompt: "We have ___ (live) here since 2019.", answers: ["lived"] },
+];
+
+const SCRAMBLE_BANK = [
+  { word: "happy", hint: "feeling joy" },
+  { word: "quickly", hint: "in a fast way" },
+  { word: "generous", hint: "willing to give" },
+  { word: "ancient", hint: "very old" },
+  { word: "reluctant", hint: "unwilling to do something" },
+  { word: "conclusion", hint: "the end result of thinking" },
+  { word: "betray", hint: "to break someone's trust" },
+  { word: "unmistakable", hint: "impossible to doubt" },
+  { word: "exhausted", hint: "very tired" },
+  { word: "inconsistent", hint: "not matching or steady" },
+];
+
+const GAME_TYPES = ['mcq','fill','scramble'];
 const TEAM_COLORS = ["#2563eb","#dc2626","#16a34a","#ea580c","#7c3aed","#0891b2","#c2703d","#4f46e5"];
 
-function questionForDay(dayIndex, slot){
-  return QUESTIONS[(dayIndex * 5 + slot) % QUESTIONS.length];
+function mcqForDay(dayIndex){ return MCQ_BANK[dayIndex % MCQ_BANK.length]; }
+function fillForDay(dayIndex){ return FILL_BANK[dayIndex % FILL_BANK.length]; }
+function scrambleForDay(dayIndex){ return SCRAMBLE_BANK[dayIndex % SCRAMBLE_BANK.length]; }
+
+function shuffleLetters(word){
+  let letters = word.split('');
+  let attempts = 0;
+  let result = word;
+  while(result === word && attempts < 20){
+    letters = [...letters].sort(() => Math.random() - 0.5);
+    result = letters.join('');
+    attempts++;
+  }
+  return result.toUpperCase();
 }
 
 /* ============================================================
-   STATE (persisted to localStorage so a page refresh keeps
-   the user exactly where they were, instead of bouncing home)
+   STATE (persisted to localStorage so refresh keeps your place)
    ============================================================ */
-const STORAGE_KEY = 'academy_state_v1';
+const STORAGE_KEY = 'academy_state_v2';
 
 function loadPersistedState(){
-  try{
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if(!raw) return null;
-    return JSON.parse(raw);
-  }catch(e){ return null; }
+  try{ const raw = localStorage.getItem(STORAGE_KEY); return raw ? JSON.parse(raw) : null; }
+  catch(e){ return null; }
 }
 function persistState(){
   try{
     localStorage.setItem(STORAGE_KEY, JSON.stringify({
-      screen: state.screen,
-      history: state.history,
-      teacherAuthed: state.teacherAuthed,
-      studentCode: state.studentCode
+      screen: state.screen, history: state.history,
+      teacherAuthed: state.teacherAuthed, studentCode: state.studentCode
     }));
-  }catch(e){ /* ignore storage errors */ }
+  }catch(e){}
 }
 
 let state = {
   screen: 'roleSelect',
   history: [],
   teacherAuthed: false,
-  team: null,           // {team_name,color,member_count,total_score,streak_days,last_played_date}
-  memberSlot: null,
-  studentCode: null,
-  answered: false
+  team: null,
+  studentName: null,
+  studentCode: null
 };
 
 const app = document.getElementById('app');
 function todayStr(){ return new Date().toISOString().slice(0,10); }
 
-/* Navigate forward: remembers where we came from so the back
-   button always has somewhere real to go. */
 function navigateTo(screen){
-  if(state.screen && state.screen !== screen){
-    state.history.push(state.screen);
-  }
+  if(state.screen && state.screen !== screen) state.history.push(state.screen);
   state.screen = screen;
   persistState();
   render();
 }
-/* Go back to the previous screen in the stack. */
 function goBack(){
   const prev = state.history.pop();
   state.screen = prev || 'roleSelect';
@@ -414,14 +427,18 @@ function topbar(){
     <div class="topbar">
       <div class="brand">
         <div class="crest">🏆</div>
-        <div>
-          <h1>The Academy</h1>
-          <div class="sub">English League</div>
-        </div>
+        <div><h1>The Academy</h1><div class="sub">English League</div></div>
       </div>
       ${showBack ? `<button class="nav-link" onclick="goBack()">← Back</button>` : ''}
     </div>
   `;
+}
+
+function teamInitials(name){
+  return name.trim().split(/\s+/).slice(0,2).map(w=>w[0].toUpperCase()).join('');
+}
+function escapeHtml(str){
+  const d = document.createElement('div'); d.textContent = str; return d.innerHTML;
 }
 
 /* ---------------- Role select ---------------- */
@@ -430,17 +447,11 @@ function renderRoleSelect(){
     ${topbar()}
     <div class="card role-card" onclick="goStudentFlow()">
       <div class="icon">🧑‍🎓</div>
-      <div>
-        <h3>I'm a Student</h3>
-        <p class="muted" style="margin:0;">Join your team and play today's challenge.</p>
-      </div>
+      <div><h3>I'm a Student</h3><p class="muted" style="margin:0;">Enter your code and play today's challenge.</p></div>
     </div>
     <div class="card role-card" onclick="goTeacherLogin()">
       <div class="icon">🧑‍🏫</div>
-      <div>
-        <h3>I'm the Teacher</h3>
-        <p class="muted" style="margin:0;">Manage teams and control today's challenge.</p>
-      </div>
+      <div><h3>I'm the Teacher</h3><p class="muted" style="margin:0;">Manage students, teams, and today's challenge.</p></div>
     </div>
     <div class="card" style="cursor:pointer;" onclick="goStandings()">
       <h3>🏅 View League Standings</h3>
@@ -470,48 +481,39 @@ function renderTeacherLogin(){
 }
 function checkPassword(){
   const val = document.getElementById('pwInput').value;
-  if(val === TEACHER_PASSWORD){
-    state.teacherAuthed = true;
-    navigateTo('teacherDashboard');
-  } else {
-    document.getElementById('pwError').innerHTML = `<div class="feedback bad">Incorrect password.</div>`;
-  }
+  if(val === TEACHER_PASSWORD){ state.teacherAuthed = true; navigateTo('teacherDashboard'); }
+  else document.getElementById('pwError').innerHTML = `<div class="feedback bad">Incorrect password.</div>`;
 }
-function teacherLogout(){
-  state.teacherAuthed = false;
-  goRoleSelect();
-}
+function teacherLogout(){ state.teacherAuthed = false; goRoleSelect(); }
 
 /* ---------------- Teacher dashboard ---------------- */
+let selectedColor = TEAM_COLORS[0];
+
 async function renderTeacherDashboard(){
   if(!state.teacherAuthed){ navigateTo('teacherLogin'); return; }
-  app.innerHTML = `
-    ${topbar()}
-    <div class="card"><p class="muted center-note">Loading dashboard…</p></div>
-  `;
-  const [{ data: teams }, { data: challengeRows }, { data: codes }] = await Promise.all([
+  app.innerHTML = `${topbar()}<div class="card"><p class="muted center-note">Loading dashboard…</p></div>`;
+
+  const [{ data: teams }, { data: challengeRows }, { data: students }] = await Promise.all([
     supabaseClient.from('teams').select('*').order('created_at', { ascending:true }),
     supabaseClient.from('challenge_state').select('*').eq('id', 1).maybeSingle(),
-    supabaseClient.from('student_codes').select('*')
+    supabaseClient.from('student_codes').select('*').order('team_name', { ascending:true })
   ]);
   const challenge = challengeRows || { is_open:false, challenge_date:null, day_index:0 };
   const isOpenToday = challenge.is_open && challenge.challenge_date === todayStr();
-  const codesByTeam = {};
-  (codes || []).forEach(c => {
-    if(!codesByTeam[c.team_name]) codesByTeam[c.team_name] = [];
-    codesByTeam[c.team_name].push(c);
-  });
+  const teamList = teams || [];
+  const studentList = students || [];
 
   app.innerHTML = `
     ${topbar()}
     <div style="text-align:right; margin-bottom:10px;">
       <button class="nav-link" onclick="teacherLogout()">Log out</button>
     </div>
+
     <div class="card">
       <span class="eyebrow">Today's Challenge</span>
       <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:12px;">
         <span class="status-pill ${isOpenToday ? 'status-open':'status-closed'}">${isOpenToday ? '● OPEN' : '● CLOSED'}</span>
-        <span class="muted" style="font-size:0.8rem;">Day #${challenge.day_index + 1}</span>
+        <span class="muted" style="font-size:0.8rem;">Day #${challenge.day_index + 1} · 3 mini-games</span>
       </div>
       ${isOpenToday
         ? `<button class="btn btn-danger" onclick="endChallenge()">End Today's Challenge</button>`
@@ -520,29 +522,19 @@ async function renderTeacherDashboard(){
     </div>
 
     <div class="card">
-      <span class="eyebrow">Teams (${teams ? teams.length : 0})</span>
+      <span class="eyebrow">Teams (${teamList.length})</span>
       <h2>Manage Teams</h2>
       <div id="teamsList">
-        ${(teams||[]).map(t => `
-          <div class="team-row" style="cursor:default; flex-direction:column; align-items:stretch;">
-            <div style="display:flex; align-items:center; justify-content:space-between;">
-              <div class="team-row-left">
-                <div class="crest-circle" style="background:${t.color}">${teamInitials(t.team_name)}</div>
-                <div>
-                  <div class="team-name">${escapeHtml(t.team_name)}</div>
-                  <div class="team-meta">${t.member_count} members · ${t.total_score} pts · 🔥${t.streak_days}d</div>
-                </div>
+        ${teamList.map(t => `
+          <div class="team-row">
+            <div class="team-row-left">
+              <div class="crest-circle" style="background:${t.color}">${teamInitials(t.team_name)}</div>
+              <div>
+                <div class="team-name">${escapeHtml(t.team_name)}</div>
+                <div class="team-meta">${studentList.filter(s=>s.team_name===t.team_name).length} students · ${t.total_score} pts · 🔥${t.streak_days}d</div>
               </div>
-              <button class="nav-link" style="color:var(--bad);" onclick="deleteTeam('${escapeHtml(t.team_name).replace(/'/g,"\\'")}')">Remove</button>
             </div>
-            <div class="divider" style="margin:10px 0;"></div>
-            <p class="muted" style="margin-bottom:6px; font-size:0.78rem;">STUDENT CODES — give each student their own code</p>
-            ${(codesByTeam[t.team_name]||[]).sort((a,b)=>a.member_slot-b.member_slot).map(c => `
-              <div style="display:flex; justify-content:space-between; padding:6px 0; font-size:0.85rem;">
-                <span>Player ${c.member_slot}</span>
-                <span style="font-family:monospace; font-weight:700; letter-spacing:1px;">${escapeHtml(c.code)}</span>
-              </div>
-            `).join('') || '<p class="muted" style="font-size:0.8rem;">No codes yet.</p>'}
+            <button class="nav-link" style="color:var(--bad);" onclick="deleteTeam('${escapeHtml(t.team_name).replace(/'/g,"\\'")}')">Remove</button>
           </div>
         `).join('') || '<p class="muted">No teams yet — add your first team below.</p>'}
       </div>
@@ -553,11 +545,36 @@ async function renderTeacherDashboard(){
       <div class="color-picker" id="colorPicker">
         ${TEAM_COLORS.map((c,i) => `<div class="color-dot ${i===0?'selected':''}" style="background:${c}" data-color="${c}" onclick="selectColor(this)"></div>`).join('')}
       </div>
-      <p class="muted" style="margin-bottom:8px;">Members per team</p>
-      <div class="member-grid" id="memberCountPicker">
-        ${[3,4,5,6].map(n => `<button class="member-btn ${n===5?'selected-count':''}" data-count="${n}" onclick="selectMemberCount(this)" style="${n===5?'border-color:var(--accent);':''}">${n}</button>`).join('')}
-      </div>
       <button class="btn btn-primary" onclick="addTeam()">Add Team</button>
+    </div>
+
+    <div class="card">
+      <span class="eyebrow">Students (${studentList.length})</span>
+      <h2>Manage Students</h2>
+      <div id="studentsList">
+        ${studentList.length ? studentList.map(s => `
+          <div class="student-row">
+            <div>
+              <strong>${escapeHtml(s.student_name)}</strong>
+              <span class="muted"> · ${escapeHtml(s.team_name)}</span>
+            </div>
+            <div style="display:flex; align-items:center; gap:8px;">
+              <span class="code-chip">${escapeHtml(s.code)}</span>
+              <button class="nav-link" style="color:var(--bad); padding:2px 4px;" onclick="deleteStudent('${escapeHtml(s.code)}')">✕</button>
+            </div>
+          </div>
+        `).join('') : '<p class="muted">No students yet — add your first student below.</p>'}
+      </div>
+      <div class="divider"></div>
+      <h3>Add a Student</h3>
+      ${!teamList.length ? '<p class="muted">Add a team first before adding students.</p>' : `
+        <input type="text" id="newStudentName" placeholder="Student name" maxlength="40">
+        <select id="newStudentTeam">
+          ${teamList.map(t => `<option value="${escapeHtml(t.team_name)}">${escapeHtml(t.team_name)}</option>`).join('')}
+        </select>
+        <button class="btn btn-primary" onclick="addStudent()">Add Student &amp; Generate Code</button>
+        <div id="newStudentResult"></div>
+      `}
     </div>
 
     <div class="card" style="cursor:pointer;" onclick="goStandings()">
@@ -567,17 +584,26 @@ async function renderTeacherDashboard(){
   `;
 }
 
-let selectedColor = TEAM_COLORS[0];
-let selectedMemberCount = 5;
 function selectColor(el){
   document.querySelectorAll('.color-dot').forEach(d => d.classList.remove('selected'));
   el.classList.add('selected');
   selectedColor = el.dataset.color;
 }
-function selectMemberCount(el){
-  document.querySelectorAll('#memberCountPicker .member-btn').forEach(b => b.style.borderColor = 'var(--line)');
-  el.style.borderColor = 'var(--accent)';
-  selectedMemberCount = parseInt(el.dataset.count, 10);
+
+async function addTeam(){
+  const nameEl = document.getElementById('newTeamName');
+  const name = nameEl.value.trim();
+  if(!name) return;
+  try{
+    await supabaseClient.from('teams').insert({ team_name: name, color: selectedColor, total_score: 0, streak_days: 0 });
+    renderTeacherDashboard();
+  }catch(e){ alert('Could not add team (maybe the name is already used).'); }
+}
+
+async function deleteTeam(name){
+  if(!confirm('Remove team "' + name + '"? Students on this team will need to be reassigned. This cannot be undone.')) return;
+  await supabaseClient.from('teams').delete().eq('team_name', name);
+  renderTeacherDashboard();
 }
 
 function generateCode(){
@@ -587,50 +613,37 @@ function generateCode(){
   return code;
 }
 
-async function addTeam(){
-  const nameEl = document.getElementById('newTeamName');
+async function addStudent(){
+  const nameEl = document.getElementById('newStudentName');
+  const teamEl = document.getElementById('newStudentTeam');
   const name = nameEl.value.trim();
-  if(!name) return;
+  const teamName = teamEl.value;
+  if(!name || !teamName) return;
+  const code = generateCode();
   try{
-    await supabaseClient.from('teams').insert({
-      team_name: name, color: selectedColor, member_count: selectedMemberCount,
-      total_score: 0, streak_days: 0
-    });
-    // Auto-generate one login code per member slot for this team
-    for(let slot = 1; slot <= selectedMemberCount; slot++){
-      await supabaseClient.from('student_codes').insert({
-        code: generateCode(), team_name: name, member_slot: slot
-      });
-    }
+    await supabaseClient.from('student_codes').insert({ code, student_name: name, team_name: teamName });
+    document.getElementById('newStudentResult').innerHTML =
+      `<div class="feedback ok">✓ Added! ${escapeHtml(name)}'s code is <strong>${code}</strong> — give this to them.</div>`;
+    nameEl.value = '';
     renderTeacherDashboard();
   }catch(e){
-    alert('Could not add team (maybe the name is already used).');
+    alert('Could not add student. Try again.');
   }
 }
 
-async function deleteTeam(name){
-  if(!confirm('Remove team "' + name + '"? This also removes its student codes and cannot be undone.')) return;
-  await supabaseClient.from('teams').delete().eq('team_name', name);
-  const { data: codes } = await supabaseClient.from('student_codes').select('*').eq('team_name', name);
-  for(const c of (codes||[])){
-    await supabaseClient.from('student_codes').delete().eq('code', c.code);
-  }
+async function deleteStudent(code){
+  if(!confirm('Remove this student code? They will no longer be able to log in with it.')) return;
+  await supabaseClient.from('student_codes').delete().eq('code', code);
   renderTeacherDashboard();
 }
 
 async function startChallenge(dayIndex){
-  await supabaseClient.from('challenge_state').update({
-    is_open: true, challenge_date: todayStr(), day_index: dayIndex
-  }).eq('id', 1);
+  await supabaseClient.from('challenge_state').update({ is_open: true, challenge_date: todayStr(), day_index: dayIndex }).eq('id', 1);
   renderTeacherDashboard();
 }
 async function endChallenge(){
   await supabaseClient.from('challenge_state').update({ is_open: false }).eq('id', 1);
   renderTeacherDashboard();
-}
-
-function teamInitials(name){
-  return name.trim().split(/\s+/).slice(0,2).map(w=>w[0].toUpperCase()).join('');
 }
 
 /* ---------------- Student: enter code ---------------- */
@@ -655,21 +668,15 @@ function renderStudentCodeEntry(){
 async function submitCode(){
   const code = document.getElementById('codeInput').value.trim().toUpperCase();
   const errEl = document.getElementById('codeError');
-  if(!code){ return; }
+  if(!code) return;
   errEl.innerHTML = '';
   try{
     const { data: codeRow } = await supabaseClient.from('student_codes').select('*').eq('code', code).maybeSingle();
-    if(!codeRow){
-      errEl.innerHTML = `<div class="feedback bad">That code isn't recognized. Check with your teacher.</div>`;
-      return;
-    }
+    if(!codeRow){ errEl.innerHTML = `<div class="feedback bad">That code isn't recognized. Check with your teacher.</div>`; return; }
     const { data: team } = await supabaseClient.from('teams').select('*').eq('team_name', codeRow.team_name).maybeSingle();
-    if(!team){
-      errEl.innerHTML = `<div class="feedback bad">Your team could not be found. Ask your teacher to check.</div>`;
-      return;
-    }
+    if(!team){ errEl.innerHTML = `<div class="feedback bad">Your team could not be found. Ask your teacher to check.</div>`; return; }
     state.team = team;
-    state.memberSlot = codeRow.member_slot;
+    state.studentName = codeRow.student_name;
     state.studentCode = code;
     navigateTo('studentChallenge');
   }catch(e){
@@ -677,7 +684,7 @@ async function submitCode(){
   }
 }
 
-/* ---------------- Student: today's challenge ---------------- */
+/* ---------------- Student: today's multi-game challenge ---------------- */
 async function renderStudentChallenge(){
   app.innerHTML = `${topbar()}<div class="card"><p class="muted center-note">Checking today's challenge…</p></div>`;
   const { data: challenge } = await supabaseClient.from('challenge_state').select('*').eq('id',1).maybeSingle();
@@ -690,7 +697,7 @@ async function renderStudentChallenge(){
       <div class="card">
         <div style="display:flex; align-items:center; gap:10px; margin-bottom:10px;">
           <div class="crest-circle" style="background:${state.team.color}">${teamInitials(state.team.team_name)}</div>
-          <h2 style="margin:0;">${escapeHtml(state.team.team_name)} · Player ${state.memberSlot}</h2>
+          <div><h2 style="margin:0;">${escapeHtml(state.studentName)}</h2><p class="muted" style="margin:0;">${escapeHtml(state.team.team_name)}</p></div>
         </div>
         <span class="status-pill status-closed">● Waiting for your teacher</span>
         <p class="muted" style="margin-top:10px;">Today's challenge hasn't started yet. Ask your teacher to press "Start Today's Challenge."</p>
@@ -704,48 +711,159 @@ async function renderStudentChallenge(){
     return;
   }
 
-  // Check if this member already answered today
   const dateStr = challenge.challenge_date;
-  const { data: existing } = await supabaseClient.from('team_progress')
-    .select('*').eq('team_name', state.team.team_name).eq('challenge_date', dateStr).eq('member_slot', state.memberSlot).maybeSingle();
+  const { data: progressRows } = await supabaseClient.from('team_progress').select('*').eq('code', state.studentCode).eq('challenge_date', dateStr);
+  const doneTypes = new Set((progressRows||[]).map(r => r.game_type));
 
-  if(existing){
+  if(doneTypes.size >= GAME_TYPES.length){
+    const correctCount = (progressRows||[]).filter(r=>r.correct).length;
     app.innerHTML = `
       ${topbar()}
       <div class="card">
         <div style="display:flex; align-items:center; gap:10px; margin-bottom:10px;">
           <div class="crest-circle" style="background:${state.team.color}">${teamInitials(state.team.team_name)}</div>
-          <h2 style="margin:0;">${escapeHtml(state.team.team_name)} · Player ${state.memberSlot}</h2>
+          <div><h2 style="margin:0;">${escapeHtml(state.studentName)}</h2><p class="muted" style="margin:0;">${escapeHtml(state.team.team_name)}</p></div>
         </div>
-        <div class="feedback ${existing.correct ? 'ok':'bad'}">${existing.correct ? '✓ You already answered correctly today! Great job.' : '✗ You already answered today. Come back tomorrow!'}</div>
+        <div class="feedback ok">🎉 You finished today's challenge! ${correctCount}/${GAME_TYPES.length} correct.</div>
         <button class="btn btn-ghost" style="margin-top:10px;" onclick="goStandings()">View Standings</button>
       </div>
     `;
     return;
   }
 
-  const q = questionForDay(challenge.day_index, (state.memberSlot - 1) % 5);
-  app.innerHTML = `
+  const nextType = GAME_TYPES.find(t => !doneTypes.has(t));
+  renderGameStage(challenge, dateStr, nextType, doneTypes);
+}
+
+function gameTrack(doneTypes, activeType){
+  return `
+    <div class="game-track">
+      ${GAME_TYPES.map(t => {
+        let cls = 'game-dot';
+        if(doneTypes.has(t)) cls += ' done';
+        else if(t === activeType) cls += ' active';
+        return `<div class="${cls}"></div>`;
+      }).join('')}
+    </div>
+  `;
+}
+
+function renderGameStage(challenge, dateStr, gameType, doneTypes){
+  const header = `
     ${topbar()}
     <div class="card">
       <div style="display:flex; align-items:center; gap:10px; margin-bottom:10px;">
         <div class="crest-circle" style="background:${state.team.color}">${teamInitials(state.team.team_name)}</div>
-        <h2 style="margin:0;">${escapeHtml(state.team.team_name)} · Player ${state.memberSlot}</h2>
+        <div><h2 style="margin:0;">${escapeHtml(state.studentName)}</h2><p class="muted" style="margin:0;">${escapeHtml(state.team.team_name)} · Day #${challenge.day_index+1}</p></div>
       </div>
-      <span class="status-pill status-open">● Day #${challenge.day_index+1} — LIVE</span>
-      <div class="divider"></div>
-      <h3>${q.q}</h3>
-      <div id="options"></div>
-    </div>
+      ${gameTrack(doneTypes, gameType)}
   `;
-  const optsDiv = document.getElementById('options');
-  q.opts.forEach((opt, idx) => {
-    const b = document.createElement('button');
-    b.className = 'mc-option';
-    b.textContent = opt;
-    b.onclick = () => submitAnswer(idx, q, dateStr);
-    optsDiv.appendChild(b);
+
+  if(gameType === 'mcq'){
+    const q = mcqForDay(challenge.day_index);
+    app.innerHTML = header + `
+      <span class="eyebrow">Multiple Choice</span>
+      <h3>${q.q}</h3>
+      <div id="gameArea"></div>
+    </div>`;
+    const area = document.getElementById('gameArea');
+    q.opts.forEach((opt, idx) => {
+      const b = document.createElement('button');
+      b.className = 'mc-option';
+      b.textContent = opt;
+      b.onclick = () => submitGameAnswer('mcq', idx === q.correct, dateStr, () => {
+        const opts = document.querySelectorAll('.mc-option');
+        opts.forEach((el,i)=>{ el.disabled=true; if(i===q.correct) el.classList.add('correct'); else if(i===idx) el.classList.add('wrong'); });
+      });
+      area.appendChild(b);
+    });
+    return;
+  }
+
+  if(gameType === 'fill'){
+    const q = fillForDay(challenge.day_index);
+    app.innerHTML = header + `
+      <span class="eyebrow">Fill in the Blank</span>
+      <h3>${q.prompt}</h3>
+      <input type="text" id="fillInput" placeholder="Type your answer">
+      <div id="gameArea"></div>
+      <button class="btn btn-primary" id="fillSubmitBtn" onclick="checkFillAnswer(${JSON.stringify(q.answers)}, '${dateStr}')">Submit</button>
+    </div>`;
+    document.getElementById('fillInput').focus();
+    return;
+  }
+
+  if(gameType === 'scramble'){
+    const q = scrambleForDay(challenge.day_index);
+    const scrambled = shuffleLetters(q.word);
+    app.innerHTML = header + `
+      <span class="eyebrow">Word Scramble</span>
+      <p class="muted">Hint: ${escapeHtml(q.hint)}</p>
+      <div class="scramble-word">${scrambled}</div>
+      <input type="text" id="scrambleInput" placeholder="Unscramble the word">
+      <div id="gameArea"></div>
+      <button class="btn btn-primary" id="scrambleSubmitBtn" onclick="checkScrambleAnswer('${q.word}', '${dateStr}')">Submit</button>
+    </div>`;
+    document.getElementById('scrambleInput').focus();
+    return;
+  }
+}
+
+function checkFillAnswer(answers, dateStr){
+  const val = document.getElementById('fillInput').value.trim().toLowerCase();
+  const correct = answers.some(a => a.toLowerCase() === val);
+  document.getElementById('fillInput').disabled = true;
+  document.getElementById('fillSubmitBtn').disabled = true;
+  submitGameAnswer('fill', correct, dateStr, () => {
+    document.getElementById('gameArea').innerHTML =
+      `<div class="feedback ${correct?'ok':'bad'}">${correct ? '✓ Correct!' : '✗ Not quite. Accepted answer: ' + escapeHtml(answers[0])}</div>`;
   });
+}
+
+function checkScrambleAnswer(word, dateStr){
+  const val = document.getElementById('scrambleInput').value.trim().toLowerCase();
+  const correct = val === word.toLowerCase();
+  document.getElementById('scrambleInput').disabled = true;
+  document.getElementById('scrambleSubmitBtn').disabled = true;
+  submitGameAnswer('scramble', correct, dateStr, () => {
+    document.getElementById('gameArea').innerHTML =
+      `<div class="feedback ${correct?'ok':'bad'}">${correct ? '✓ Correct!' : '✗ Not quite. The word was: ' + escapeHtml(word)}</div>`;
+  });
+}
+
+async function submitGameAnswer(gameType, correct, dateStr, uiUpdateFn){
+  uiUpdateFn();
+  const fb = document.createElement('div');
+  fb.className = 'feedback ' + (correct ? 'ok' : 'bad');
+  fb.textContent = correct ? '✓ +15 points for ' + state.team.team_name : '✗ No points this round — nice try!';
+  document.getElementById('gameArea').appendChild(fb);
+
+  try{
+    await supabaseClient.from('team_progress').insert({
+      code: state.studentCode, challenge_date: dateStr, game_type: gameType, correct: correct
+    });
+    if(correct){
+      const { data: teamRow } = await supabaseClient.from('teams').select('*').eq('team_name', state.team.team_name).maybeSingle();
+      if(teamRow){
+        const newScore = teamRow.total_score + 15;
+        let newStreak = teamRow.streak_days;
+        const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0,10);
+        if(teamRow.last_played_date !== dateStr){
+          newStreak = (teamRow.last_played_date === yesterday) ? teamRow.streak_days + 1 : 1;
+        }
+        await supabaseClient.from('teams').update({ total_score: newScore, streak_days: newStreak, last_played_date: dateStr }).eq('team_name', state.team.team_name);
+        state.team.total_score = newScore;
+        state.team.streak_days = newStreak;
+      }
+    }
+  }catch(e){ console.error('submit failed', e); }
+
+  const nextBtn = document.createElement('button');
+  nextBtn.className = 'btn btn-primary';
+  nextBtn.style.marginTop = '10px';
+  nextBtn.textContent = 'Continue →';
+  nextBtn.onclick = () => renderStudentChallenge();
+  document.getElementById('gameArea').appendChild(nextBtn);
 }
 
 function miniStandingsRows(teams){
@@ -761,51 +879,6 @@ function miniStandingsRows(teams){
       <div class="team-meta" style="font-weight:700; color:var(--ink);">${t.total_score} pts</div>
     </div>
   `).join('');
-}
-
-async function submitAnswer(idx, q, dateStr){
-  const correct = idx === q.correct;
-  const opts = document.querySelectorAll('.mc-option');
-  opts.forEach((el,i) => {
-    el.disabled = true;
-    if(i === q.correct) el.classList.add('correct');
-    else if(i === idx) el.classList.add('wrong');
-  });
-  const fb = document.createElement('div');
-  fb.className = 'feedback ' + (correct ? 'ok' : 'bad');
-  fb.textContent = correct ? '✓ Correct! +20 points for ' + state.team.team_name : '✗ Not quite — no points this time, but thanks for playing!';
-  document.getElementById('options').appendChild(fb);
-
-  try{
-    await supabaseClient.from('team_progress').insert({
-      team_name: state.team.team_name, challenge_date: dateStr,
-      member_slot: state.memberSlot, correct: correct
-    });
-
-    if(correct){
-      const { data: teamRow } = await supabaseClient.from('teams').select('*').eq('team_name', state.team.team_name).maybeSingle();
-      if(teamRow){
-        const newScore = teamRow.total_score + 20;
-        let newStreak = teamRow.streak_days;
-        const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0,10);
-        if(teamRow.last_played_date !== dateStr){
-          newStreak = (teamRow.last_played_date === yesterday) ? teamRow.streak_days + 1 : 1;
-        }
-        await supabaseClient.from('teams').update({
-          total_score: newScore, streak_days: newStreak, last_played_date: dateStr
-        }).eq('team_name', state.team.team_name);
-        state.team.total_score = newScore;
-        state.team.streak_days = newStreak;
-      }
-    }
-  }catch(e){ console.error('submit failed', e); }
-
-  const doneBtn = document.createElement('button');
-  doneBtn.className = 'btn btn-primary';
-  doneBtn.style.marginTop = '10px';
-  doneBtn.textContent = 'View Standings';
-  doneBtn.onclick = goStandings;
-  document.getElementById('options').appendChild(doneBtn);
 }
 
 /* ---------------- Standings ---------------- */
@@ -824,9 +897,7 @@ async function renderStandings(){
           ${teams.map((t,i) => `
             <tr>
               <td>${medals[i] ? `<span class="rank-medal">${medals[i]}</span>` : (i+1)}</td>
-              <td>
-                <span class="team-swatch" style="background:${t.color}"></span>${escapeHtml(t.team_name)}
-              </td>
+              <td><span class="team-swatch" style="background:${t.color}"></span>${escapeHtml(t.team_name)}</td>
               <td>${t.streak_days > 0 ? `<span class="streak-badge">🔥 ${t.streak_days}d</span>` : '<span class="muted">—</span>'}</td>
               <td style="text-align:right; font-weight:700;">${t.total_score}</td>
             </tr>
@@ -837,15 +908,8 @@ async function renderStandings(){
   `;
 }
 
-function escapeHtml(str){
-  const d = document.createElement('div');
-  d.textContent = str;
-  return d.innerHTML;
-}
-
 /* ============================================================
-   BOOT — restore where the user left off on refresh, instead
-   of always bouncing back to the home screen.
+   BOOT — restore where the user left off on refresh
    ============================================================ */
 async function boot(){
   const saved = loadPersistedState();
@@ -857,19 +921,15 @@ async function boot(){
     if(saved.screen === 'teacherDashboard' && !state.teacherAuthed){
       state.screen = 'roleSelect'; state.history = [];
     } else if(saved.screen === 'studentChallenge' && state.studentCode){
-      // Re-validate the student's code against the server before restoring
       try{
         const { data: codeRow } = await supabaseClient.from('student_codes').select('*').eq('code', state.studentCode).maybeSingle();
         if(codeRow){
           const { data: team } = await supabaseClient.from('teams').select('*').eq('team_name', codeRow.team_name).maybeSingle();
-          if(team){
-            state.team = team;
-            state.memberSlot = codeRow.member_slot;
-            state.screen = 'studentChallenge';
-          } else { state.screen = 'roleSelect'; state.history = []; }
+          if(team){ state.team = team; state.studentName = codeRow.student_name; state.screen = 'studentChallenge'; }
+          else { state.screen = 'roleSelect'; state.history = []; }
         } else { state.screen = 'roleSelect'; state.history = []; }
       }catch(e){ state.screen = 'roleSelect'; state.history = []; }
-    } else if(saved.screen === 'studentCodeEntry' || saved.screen === 'standings' || saved.screen === 'teacherLogin' || saved.screen === 'teacherDashboard'){
+    } else if(['studentCodeEntry','standings','teacherLogin','teacherDashboard'].includes(saved.screen)){
       state.screen = saved.screen;
     } else {
       state.screen = 'roleSelect'; state.history = [];
