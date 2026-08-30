@@ -337,20 +337,59 @@ function questionForDay(dayIndex, slot){
 }
 
 /* ============================================================
-   STATE
+   STATE (persisted to localStorage so a page refresh keeps
+   the user exactly where they were, instead of bouncing home)
    ============================================================ */
+const STORAGE_KEY = 'academy_state_v1';
+
+function loadPersistedState(){
+  try{
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if(!raw) return null;
+    return JSON.parse(raw);
+  }catch(e){ return null; }
+}
+function persistState(){
+  try{
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({
+      screen: state.screen,
+      history: state.history,
+      teacherAuthed: state.teacherAuthed,
+      studentCode: state.studentCode
+    }));
+  }catch(e){ /* ignore storage errors */ }
+}
+
 let state = {
   screen: 'roleSelect',
-  role: null,          // 'teacher' | 'student'
+  history: [],
   teacherAuthed: false,
   team: null,           // {team_name,color,member_count,total_score,streak_days,last_played_date}
   memberSlot: null,
-  challenge: null,      // {is_open, challenge_date, day_index}
+  studentCode: null,
   answered: false
 };
 
 const app = document.getElementById('app');
 function todayStr(){ return new Date().toISOString().slice(0,10); }
+
+/* Navigate forward: remembers where we came from so the back
+   button always has somewhere real to go. */
+function navigateTo(screen){
+  if(state.screen && state.screen !== screen){
+    state.history.push(state.screen);
+  }
+  state.screen = screen;
+  persistState();
+  render();
+}
+/* Go back to the previous screen in the stack. */
+function goBack(){
+  const prev = state.history.pop();
+  state.screen = prev || 'roleSelect';
+  persistState();
+  render();
+}
 
 function render(){
   if(!supabaseReady && state.screen !== 'roleSelect'){
@@ -362,15 +401,15 @@ function render(){
     roleSelect: renderRoleSelect,
     teacherLogin: renderTeacherLogin,
     teacherDashboard: renderTeacherDashboard,
-    studentTeamSelect: renderStudentTeamSelect,
-    studentMemberSelect: renderStudentMemberSelect,
+    studentCodeEntry: renderStudentCodeEntry,
     studentChallenge: renderStudentChallenge,
     standings: renderStandings,
   };
   (map[state.screen] || renderRoleSelect)();
 }
 
-function topbar(rightLabel, rightAction){
+function topbar(){
+  const showBack = state.screen !== 'roleSelect';
   return `
     <div class="topbar">
       <div class="brand">
@@ -380,7 +419,7 @@ function topbar(rightLabel, rightAction){
           <div class="sub">English League</div>
         </div>
       </div>
-      ${rightLabel ? `<button class="nav-link" onclick="${rightAction}">${rightLabel}</button>` : ''}
+      ${showBack ? `<button class="nav-link" onclick="goBack()">← Back</button>` : ''}
     </div>
   `;
 }
@@ -409,15 +448,15 @@ function renderRoleSelect(){
     </div>
   `;
 }
-function goStudentFlow(){ state.screen='studentTeamSelect'; render(); }
-function goTeacherLogin(){ state.screen='teacherLogin'; render(); }
-function goStandings(){ state.screen='standings'; state.returnScreen = state.screen; render(); }
-function goRoleSelect(){ state.screen='roleSelect'; render(); }
+function goStudentFlow(){ navigateTo('studentCodeEntry'); }
+function goTeacherLogin(){ navigateTo('teacherLogin'); }
+function goStandings(){ navigateTo('standings'); }
+function goRoleSelect(){ state.screen='roleSelect'; state.history=[]; persistState(); render(); }
 
 /* ---------------- Teacher login ---------------- */
 function renderTeacherLogin(){
   app.innerHTML = `
-    ${topbar('← Back', 'goRoleSelect()')}
+    ${topbar()}
     <div class="card">
       <span class="eyebrow">Teacher Access</span>
       <h2>Enter password</h2>
@@ -433,29 +472,41 @@ function checkPassword(){
   const val = document.getElementById('pwInput').value;
   if(val === TEACHER_PASSWORD){
     state.teacherAuthed = true;
-    state.screen = 'teacherDashboard';
-    render();
+    navigateTo('teacherDashboard');
   } else {
     document.getElementById('pwError').innerHTML = `<div class="feedback bad">Incorrect password.</div>`;
   }
 }
+function teacherLogout(){
+  state.teacherAuthed = false;
+  goRoleSelect();
+}
 
 /* ---------------- Teacher dashboard ---------------- */
 async function renderTeacherDashboard(){
-  if(!state.teacherAuthed){ state.screen='teacherLogin'; return render(); }
+  if(!state.teacherAuthed){ navigateTo('teacherLogin'); return; }
   app.innerHTML = `
-    ${topbar('Log out', 'goRoleSelect()')}
+    ${topbar()}
     <div class="card"><p class="muted center-note">Loading dashboard…</p></div>
   `;
-  const [{ data: teams }, { data: challengeRows }] = await Promise.all([
+  const [{ data: teams }, { data: challengeRows }, { data: codes }] = await Promise.all([
     supabaseClient.from('teams').select('*').order('created_at', { ascending:true }),
-    supabaseClient.from('challenge_state').select('*').eq('id', 1).maybeSingle()
+    supabaseClient.from('challenge_state').select('*').eq('id', 1).maybeSingle(),
+    supabaseClient.from('student_codes').select('*')
   ]);
   const challenge = challengeRows || { is_open:false, challenge_date:null, day_index:0 };
   const isOpenToday = challenge.is_open && challenge.challenge_date === todayStr();
+  const codesByTeam = {};
+  (codes || []).forEach(c => {
+    if(!codesByTeam[c.team_name]) codesByTeam[c.team_name] = [];
+    codesByTeam[c.team_name].push(c);
+  });
 
   app.innerHTML = `
-    ${topbar('Log out', 'goRoleSelect()')}
+    ${topbar()}
+    <div style="text-align:right; margin-bottom:10px;">
+      <button class="nav-link" onclick="teacherLogout()">Log out</button>
+    </div>
     <div class="card">
       <span class="eyebrow">Today's Challenge</span>
       <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:12px;">
@@ -473,15 +524,25 @@ async function renderTeacherDashboard(){
       <h2>Manage Teams</h2>
       <div id="teamsList">
         ${(teams||[]).map(t => `
-          <div class="team-row">
-            <div class="team-row-left">
-              <div class="crest-circle" style="background:${t.color}">${teamInitials(t.team_name)}</div>
-              <div>
-                <div class="team-name">${escapeHtml(t.team_name)}</div>
-                <div class="team-meta">${t.member_count} members · ${t.total_score} pts · 🔥${t.streak_days}d</div>
+          <div class="team-row" style="cursor:default; flex-direction:column; align-items:stretch;">
+            <div style="display:flex; align-items:center; justify-content:space-between;">
+              <div class="team-row-left">
+                <div class="crest-circle" style="background:${t.color}">${teamInitials(t.team_name)}</div>
+                <div>
+                  <div class="team-name">${escapeHtml(t.team_name)}</div>
+                  <div class="team-meta">${t.member_count} members · ${t.total_score} pts · 🔥${t.streak_days}d</div>
+                </div>
               </div>
+              <button class="nav-link" style="color:var(--bad);" onclick="deleteTeam('${escapeHtml(t.team_name).replace(/'/g,"\\'")}')">Remove</button>
             </div>
-            <button class="nav-link" style="color:var(--bad);" onclick="deleteTeam('${escapeHtml(t.team_name).replace(/'/g,"\\'")}')">Remove</button>
+            <div class="divider" style="margin:10px 0;"></div>
+            <p class="muted" style="margin-bottom:6px; font-size:0.78rem;">STUDENT CODES — give each student their own code</p>
+            ${(codesByTeam[t.team_name]||[]).sort((a,b)=>a.member_slot-b.member_slot).map(c => `
+              <div style="display:flex; justify-content:space-between; padding:6px 0; font-size:0.85rem;">
+                <span>Player ${c.member_slot}</span>
+                <span style="font-family:monospace; font-weight:700; letter-spacing:1px;">${escapeHtml(c.code)}</span>
+              </div>
+            `).join('') || '<p class="muted" style="font-size:0.8rem;">No codes yet.</p>'}
           </div>
         `).join('') || '<p class="muted">No teams yet — add your first team below.</p>'}
       </div>
@@ -519,6 +580,13 @@ function selectMemberCount(el){
   selectedMemberCount = parseInt(el.dataset.count, 10);
 }
 
+function generateCode(){
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no confusing chars (0/O, 1/I)
+  let code = '';
+  for(let i=0;i<6;i++) code += chars[Math.floor(Math.random()*chars.length)];
+  return code;
+}
+
 async function addTeam(){
   const nameEl = document.getElementById('newTeamName');
   const name = nameEl.value.trim();
@@ -528,6 +596,12 @@ async function addTeam(){
       team_name: name, color: selectedColor, member_count: selectedMemberCount,
       total_score: 0, streak_days: 0
     });
+    // Auto-generate one login code per member slot for this team
+    for(let slot = 1; slot <= selectedMemberCount; slot++){
+      await supabaseClient.from('student_codes').insert({
+        code: generateCode(), team_name: name, member_slot: slot
+      });
+    }
     renderTeacherDashboard();
   }catch(e){
     alert('Could not add team (maybe the name is already used).');
@@ -535,8 +609,12 @@ async function addTeam(){
 }
 
 async function deleteTeam(name){
-  if(!confirm('Remove team "' + name + '"? This cannot be undone.')) return;
+  if(!confirm('Remove team "' + name + '"? This also removes its student codes and cannot be undone.')) return;
   await supabaseClient.from('teams').delete().eq('team_name', name);
+  const { data: codes } = await supabaseClient.from('student_codes').select('*').eq('team_name', name);
+  for(const c of (codes||[])){
+    await supabaseClient.from('student_codes').delete().eq('code', c.code);
+  }
   renderTeacherDashboard();
 }
 
@@ -555,79 +633,60 @@ function teamInitials(name){
   return name.trim().split(/\s+/).slice(0,2).map(w=>w[0].toUpperCase()).join('');
 }
 
-/* ---------------- Student: pick team ---------------- */
-async function renderStudentTeamSelect(){
-  app.innerHTML = `${topbar('← Back', 'goRoleSelect()')}<div class="card"><p class="muted center-note">Loading teams…</p></div>`;
-  const { data: teams } = await supabaseClient.from('teams').select('*').order('created_at', { ascending:true });
+/* ---------------- Student: enter code ---------------- */
+function renderStudentCodeEntry(){
   app.innerHTML = `
-    ${topbar('← Back', 'goRoleSelect()')}
+    ${topbar()}
     <div class="card">
-      <span class="eyebrow">Join Your Team</span>
-      <h2>Which team are you on?</h2>
-      <div id="teamPickList">
-        ${(!teams || !teams.length) ? '<p class="muted">Your teacher hasn\'t created any teams yet. Ask them to open the Teacher Dashboard.</p>' : ''}
-      </div>
+      <span class="eyebrow">Join Today's Challenge</span>
+      <h2>Enter your student code</h2>
+      <p class="muted">Your teacher gave you a personal code. It's linked to your team — you can't change teams yourself.</p>
+      <input type="text" id="codeInput" placeholder="e.g. K7P2XQ" maxlength="6" style="text-transform:uppercase; letter-spacing:2px; font-weight:700; text-align:center; font-size:1.2rem;">
+      <div id="codeError"></div>
+      <button class="btn btn-primary" onclick="submitCode()">Continue</button>
     </div>
   `;
-  const listEl = document.getElementById('teamPickList');
-  (teams || []).forEach(t => {
-    const row = document.createElement('div');
-    row.className = 'team-row';
-    row.innerHTML = `
-      <div class="team-row-left">
-        <div class="crest-circle" style="background:${t.color}">${teamInitials(t.team_name)}</div>
-        <div>
-          <div class="team-name">${escapeHtml(t.team_name)}</div>
-          <div class="team-meta">${t.total_score} pts · 🔥${t.streak_days}d streak</div>
-        </div>
-      </div>
-      <span style="color:var(--muted);">›</span>
-    `;
-    row.onclick = () => selectTeam(t);
-    listEl.appendChild(row);
-  });
-}
-function selectTeam(team){
-  state.team = team;
-  state.screen = 'studentMemberSelect';
-  render();
+  const input = document.getElementById('codeInput');
+  input.focus();
+  input.addEventListener('input', () => { input.value = input.value.toUpperCase(); });
+  input.addEventListener('keydown', e => { if(e.key==='Enter') submitCode(); });
 }
 
-/* ---------------- Student: pick member slot ---------------- */
-function renderStudentMemberSelect(){
-  const t = state.team;
-  app.innerHTML = `
-    ${topbar('← Change team', 'goStudentFlow()')}
-    <div class="card">
-      <div style="display:flex; align-items:center; gap:10px; margin-bottom:14px;">
-        <div class="crest-circle" style="background:${t.color}">${teamInitials(t.team_name)}</div>
-        <h2 style="margin:0;">${escapeHtml(t.team_name)}</h2>
-      </div>
-      <span class="eyebrow">Which member are you?</span>
-      <div class="member-grid">
-        ${Array.from({length: t.member_count}, (_,i) => i+1).map(n => `
-          <button class="member-btn" onclick="selectMember(${n})">Player ${n}</button>
-        `).join('')}
-      </div>
-    </div>
-  `;
-}
-function selectMember(n){
-  state.memberSlot = n;
-  state.screen = 'studentChallenge';
-  render();
+async function submitCode(){
+  const code = document.getElementById('codeInput').value.trim().toUpperCase();
+  const errEl = document.getElementById('codeError');
+  if(!code){ return; }
+  errEl.innerHTML = '';
+  try{
+    const { data: codeRow } = await supabaseClient.from('student_codes').select('*').eq('code', code).maybeSingle();
+    if(!codeRow){
+      errEl.innerHTML = `<div class="feedback bad">That code isn't recognized. Check with your teacher.</div>`;
+      return;
+    }
+    const { data: team } = await supabaseClient.from('teams').select('*').eq('team_name', codeRow.team_name).maybeSingle();
+    if(!team){
+      errEl.innerHTML = `<div class="feedback bad">Your team could not be found. Ask your teacher to check.</div>`;
+      return;
+    }
+    state.team = team;
+    state.memberSlot = codeRow.member_slot;
+    state.studentCode = code;
+    navigateTo('studentChallenge');
+  }catch(e){
+    errEl.innerHTML = `<div class="feedback bad">Something went wrong. Try again.</div>`;
+  }
 }
 
 /* ---------------- Student: today's challenge ---------------- */
 async function renderStudentChallenge(){
-  app.innerHTML = `${topbar('← Change team', 'goStudentFlow()')}<div class="card"><p class="muted center-note">Checking today's challenge…</p></div>`;
+  app.innerHTML = `${topbar()}<div class="card"><p class="muted center-note">Checking today's challenge…</p></div>`;
   const { data: challenge } = await supabaseClient.from('challenge_state').select('*').eq('id',1).maybeSingle();
   const isOpenToday = challenge && challenge.is_open && challenge.challenge_date === todayStr();
 
   if(!isOpenToday){
     const { data: standingsData } = await supabaseClient.from('teams').select('*').order('total_score', { ascending:false }).limit(5);
     app.innerHTML = `
-      ${topbar('← Change team', 'goStudentFlow()')}
+      ${topbar()}
       <div class="card">
         <div style="display:flex; align-items:center; gap:10px; margin-bottom:10px;">
           <div class="crest-circle" style="background:${state.team.color}">${teamInitials(state.team.team_name)}</div>
@@ -652,7 +711,7 @@ async function renderStudentChallenge(){
 
   if(existing){
     app.innerHTML = `
-      ${topbar('← Change team', 'goStudentFlow()')}
+      ${topbar()}
       <div class="card">
         <div style="display:flex; align-items:center; gap:10px; margin-bottom:10px;">
           <div class="crest-circle" style="background:${state.team.color}">${teamInitials(state.team.team_name)}</div>
@@ -667,7 +726,7 @@ async function renderStudentChallenge(){
 
   const q = questionForDay(challenge.day_index, (state.memberSlot - 1) % 5);
   app.innerHTML = `
-    ${topbar('← Change team', 'goStudentFlow()')}
+    ${topbar()}
     <div class="card">
       <div style="display:flex; align-items:center; gap:10px; margin-bottom:10px;">
         <div class="crest-circle" style="background:${state.team.color}">${teamInitials(state.team.team_name)}</div>
@@ -751,11 +810,11 @@ async function submitAnswer(idx, q, dateStr){
 
 /* ---------------- Standings ---------------- */
 async function renderStandings(){
-  app.innerHTML = `${topbar('← Back', 'goBackFromStandings()')}<div class="card"><p class="muted center-note">Loading league table…</p></div>`;
+  app.innerHTML = `${topbar()}<div class="card"><p class="muted center-note">Loading league table…</p></div>`;
   const { data: teams } = await supabaseClient.from('teams').select('*').order('total_score', { ascending:false });
   const medals = ['🥇','🥈','🥉'];
   app.innerHTML = `
-    ${topbar('← Back', 'goBackFromStandings()')}
+    ${topbar()}
     <div class="card">
       <span class="eyebrow">League Table</span>
       <h2>Standings</h2>
@@ -777,11 +836,6 @@ async function renderStandings(){
     </div>
   `;
 }
-function goBackFromStandings(){
-  if(state.team){ state.screen = 'studentChallenge'; }
-  else { state.screen = 'roleSelect'; }
-  render();
-}
 
 function escapeHtml(str){
   const d = document.createElement('div');
@@ -789,7 +843,41 @@ function escapeHtml(str){
   return d.innerHTML;
 }
 
-render();
+/* ============================================================
+   BOOT — restore where the user left off on refresh, instead
+   of always bouncing back to the home screen.
+   ============================================================ */
+async function boot(){
+  const saved = loadPersistedState();
+  if(saved){
+    state.history = saved.history || [];
+    state.teacherAuthed = !!saved.teacherAuthed;
+    state.studentCode = saved.studentCode || null;
+
+    if(saved.screen === 'teacherDashboard' && !state.teacherAuthed){
+      state.screen = 'roleSelect'; state.history = [];
+    } else if(saved.screen === 'studentChallenge' && state.studentCode){
+      // Re-validate the student's code against the server before restoring
+      try{
+        const { data: codeRow } = await supabaseClient.from('student_codes').select('*').eq('code', state.studentCode).maybeSingle();
+        if(codeRow){
+          const { data: team } = await supabaseClient.from('teams').select('*').eq('team_name', codeRow.team_name).maybeSingle();
+          if(team){
+            state.team = team;
+            state.memberSlot = codeRow.member_slot;
+            state.screen = 'studentChallenge';
+          } else { state.screen = 'roleSelect'; state.history = []; }
+        } else { state.screen = 'roleSelect'; state.history = []; }
+      }catch(e){ state.screen = 'roleSelect'; state.history = []; }
+    } else if(saved.screen === 'studentCodeEntry' || saved.screen === 'standings' || saved.screen === 'teacherLogin' || saved.screen === 'teacherDashboard'){
+      state.screen = saved.screen;
+    } else {
+      state.screen = 'roleSelect'; state.history = [];
+    }
+  }
+  render();
+}
+boot();
 </script>
 </body>
 </html>
