@@ -1,0 +1,689 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>The Academy — English League</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="supabase.js"></script>
+<style>
+  :root{
+    --navy: #0f1b2d;
+    --navy-2: #16283f;
+    --paper: #f5f7fb;
+    --card: #ffffff;
+    --ink: #101826;
+    --muted: #64748b;
+    --line: #e4e9f2;
+    --accent: #2563eb;
+    --accent-dim: #eef2ff;
+    --gold: #eab308;
+    --silver: #a3adc2;
+    --bronze: #c2703d;
+    --ok: #16a34a;
+    --bad: #dc2626;
+    --font-head: 'Manrope', sans-serif;
+    --font-body: 'Inter', sans-serif;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0; min-height:100vh;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--font-body);
+    padding: 16px 14px 50px;
+  }
+  .app{ max-width: 560px; margin:0 auto; }
+
+  .topbar{
+    display:flex; align-items:center; justify-content:space-between;
+    margin-bottom: 16px;
+  }
+  .brand{ display:flex; align-items:center; gap:10px; }
+  .brand .crest{
+    width:34px; height:34px; border-radius:9px;
+    background: linear-gradient(135deg, var(--navy), var(--accent));
+    display:flex; align-items:center; justify-content:center;
+    font-size:1.1rem;
+  }
+  .brand h1{ font-family: var(--font-head); font-size:1.05rem; margin:0; font-weight:800; }
+  .brand .sub{ font-size:0.68rem; color:var(--muted); letter-spacing:0.5px; text-transform:uppercase; }
+  .nav-link{
+    font-size:0.78rem; color: var(--accent); font-weight:600; cursor:pointer;
+    background:none; border:none; padding:6px 10px;
+  }
+
+  .card{
+    background: var(--card); border: 1px solid var(--line); border-radius: 14px;
+    padding: 20px 18px; margin-bottom: 14px;
+    box-shadow: 0 1px 2px rgba(16,24,38,0.04);
+  }
+  .eyebrow{
+    font-size: 0.7rem; font-weight:700; letter-spacing: 1.2px; text-transform: uppercase;
+    color: var(--accent); margin-bottom: 6px; display:block;
+  }
+  h2{ font-family: var(--font-head); font-size: 1.2rem; margin: 0 0 10px; font-weight:800; }
+  h3{ font-family: var(--font-head); font-size: 1rem; margin: 0 0 8px; font-weight:700; }
+  p{ line-height:1.6; margin: 0 0 10px; color: var(--ink); font-size:0.95rem; }
+  p.muted{ color: var(--muted); font-size: 0.85rem; }
+
+  input[type=text], input[type=password]{
+    width:100%; font-family: var(--font-body); font-size:1rem;
+    padding: 12px 13px; border-radius: 8px; border: 1.5px solid var(--line);
+    background: #fff; color: var(--ink); margin-bottom: 10px;
+  }
+  input:focus{ outline:none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-dim); }
+
+  .btn{
+    font-family: var(--font-head); font-weight:700; font-size: 0.92rem;
+    padding: 13px 16px; border-radius: 9px; border:none; cursor:pointer;
+    width:100%; transition: filter .15s ease, transform .1s ease;
+  }
+  .btn:active{ transform: scale(0.98); }
+  .btn-primary{ background: var(--navy); color:#fff; }
+  .btn-primary:hover{ filter:brightness(1.15); }
+  .btn-accent{ background: var(--accent); color:#fff; }
+  .btn-accent:hover{ filter:brightness(1.1); }
+  .btn-ghost{ background: #fff; border: 1.5px solid var(--line); color: var(--ink); }
+  .btn-danger{ background:#fff; border:1.5px solid var(--bad); color:var(--bad); }
+  .btn:disabled{ opacity:0.4; cursor:not-allowed; }
+  .btn-row{ display:flex; gap:10px; }
+  .btn-row .btn{ flex:1; }
+
+  .role-card{
+    display:flex; align-items:center; gap:14px; cursor:pointer;
+    padding: 18px; margin-bottom:12px;
+  }
+  .role-card .icon{ font-size:1.8rem; }
+  .role-card:hover{ border-color: var(--accent); }
+
+  .team-swatch{
+    width:22px; height:22px; border-radius:6px; display:inline-block; margin-right:8px; vertical-align:middle;
+  }
+  .team-row{
+    display:flex; align-items:center; justify-content:space-between;
+    padding: 12px; border: 1.5px solid var(--line); border-radius:10px; margin-bottom:8px;
+    cursor:pointer;
+  }
+  .team-row:hover{ border-color: var(--accent); }
+  .team-row-left{ display:flex; align-items:center; }
+  .team-row .team-name{ font-weight:700; }
+  .team-row .team-meta{ font-size:0.75rem; color:var(--muted); }
+
+  .crest-circle{
+    width:38px; height:38px; border-radius:50%; display:flex; align-items:center; justify-content:center;
+    color:#fff; font-family: var(--font-head); font-weight:800; font-size:0.9rem; margin-right:10px; flex-shrink:0;
+  }
+
+  .color-picker{ display:flex; gap:8px; flex-wrap:wrap; margin-bottom:14px; }
+  .color-dot{
+    width:30px; height:30px; border-radius:50%; cursor:pointer; border:3px solid transparent;
+  }
+  .color-dot.selected{ border-color: var(--ink); }
+
+  .member-grid{ display:grid; grid-template-columns: repeat(auto-fill, minmax(70px,1fr)); gap:8px; margin-bottom:12px; }
+  .member-btn{
+    padding: 14px 4px; border-radius:9px; border:1.5px solid var(--line); background:#fff;
+    font-family: var(--font-head); font-weight:700; cursor:pointer; text-align:center;
+  }
+  .member-btn:hover{ border-color: var(--accent); }
+
+  .status-pill{
+    display:inline-flex; align-items:center; gap:6px;
+    font-size:0.78rem; font-weight:700; padding: 5px 12px; border-radius:20px;
+  }
+  .status-open{ background: #dcfce7; color: var(--ok); }
+  .status-closed{ background: #fee2e2; color: var(--bad); }
+
+  .mc-option{
+    display:block; width:100%; text-align:left;
+    background: #fff; border: 1.5px solid var(--line); border-radius: 9px;
+    padding: 13px 15px; margin-bottom: 9px; cursor:pointer;
+    font-family: var(--font-body); font-size: 0.95rem; color: var(--ink);
+  }
+  .mc-option:hover{ border-color: var(--accent); }
+  .mc-option.correct{ border-color: var(--ok); background: #f0fdf4; }
+  .mc-option.wrong{ border-color: var(--bad); background: #fef2f2; }
+  .mc-option:disabled{ pointer-events:none; }
+
+  .feedback{
+    font-size: 0.88rem; font-weight:600;
+    padding: 11px 13px; border-radius: 9px; margin: 8px 0 4px;
+  }
+  .feedback.ok{ background: #f0fdf4; color: var(--ok); }
+  .feedback.bad{ background: #fef2f2; color: var(--bad); }
+
+  table.standings{ width:100%; border-collapse:collapse; }
+  table.standings th{
+    text-align:left; font-size:0.7rem; text-transform:uppercase; letter-spacing:0.6px;
+    color: var(--muted); padding: 6px 8px; border-bottom: 2px solid var(--line);
+  }
+  table.standings td{ padding: 10px 8px; border-bottom: 1px solid var(--line); font-size:0.9rem; }
+  table.standings tr:last-child td{ border-bottom:none; }
+  .rank-medal{ font-size:1.1rem; }
+  .streak-badge{
+    font-size:0.72rem; background:#fff7ed; color:#c2703d; padding:2px 8px; border-radius:12px; font-weight:700;
+  }
+
+  .center-note{ text-align:center; color: var(--muted); font-size: 0.85rem; margin-top: 8px; }
+  .divider{ height:1px; background:var(--line); margin: 14px 0; }
+</style>
+</head>
+<body>
+<div class="app" id="app"></div>
+
+<script>
+/* ============================================================
+   SUPABASE CONFIG — same project as Word Heist
+   ============================================================ */
+const SUPABASE_URL = "https://fttdyfyuzlyhgjudcefd.supabase.co";
+const SUPABASE_ANON_KEY = "sb_publishable_IHJz931f_p6eyWMLpJHong_bHvZ0aqI";
+
+const TEACHER_PASSWORD = "academy2026"; // ⚠ change this before sharing with students
+
+let supabaseClient = null;
+let supabaseReady = false;
+function tryInitSupabase(){
+  if(supabaseReady) return true;
+  try{
+    if(window.supabase && typeof window.supabase.createClient === 'function'){
+      supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+      supabaseReady = true;
+      return true;
+    }
+  }catch(e){ console.error('Supabase init failed', e); }
+  return false;
+}
+tryInitSupabase();
+
+/* ============================================================
+   QUESTION BANK — rotates by day_index, 5 slots per day
+   ============================================================ */
+const QUESTIONS = [
+  { q: "Choose the correct word: \"She ___ to the store every day.\"", opts: ["go","goes","going","gone"], correct: 1 },
+  { q: "What is the synonym of \"happy\"?", opts: ["sad","joyful","angry","tired"], correct: 1 },
+  { q: "Fix the sentence: \"He don't like coffee.\"", opts: ["He doesn't like coffee.","He not like coffee.","He no likes coffee.","He isn't like coffee."], correct: 0 },
+  { q: "What is the opposite of \"ancient\"?", opts: ["old","modern","dusty","historic"], correct: 1 },
+  { q: "Choose the correct word: \"They ___ finished the project.\"", opts: ["has","have","having","haves"], correct: 1 },
+  { q: "What does \"reluctant\" mean?", opts: ["excited","unwilling","confused","certain"], correct: 1 },
+  { q: "Fix the sentence: \"I have went there yesterday.\"", opts: ["I have gone there yesterday.","I went there yesterday.","I have go there yesterday.","I going there yesterday."], correct: 1 },
+  { q: "What is the synonym of \"quickly\"?", opts: ["slowly","rapidly","calmly","rarely"], correct: 1 },
+  { q: "Choose the correct word: \"If I ___ rich, I would travel.\"", opts: ["am","was","were","be"], correct: 2 },
+  { q: "What does \"betray\" mean?", opts: ["to help","to break someone's trust","to celebrate","to forgive"], correct: 1 },
+  { q: "Fix the sentence: \"Where you are going?\"", opts: ["Where are you going?","Where you going are?","Where going you are?","Where you go?"], correct: 0 },
+  { q: "What is the opposite of \"generous\"?", opts: ["kind","selfish","wealthy","friendly"], correct: 1 },
+  { q: "Choose the correct word: \"By next year, I ___ my degree.\"", opts: ["will finish","will have finished","finished","am finishing"], correct: 1 },
+  { q: "What does \"unmistakable\" mean?", opts: ["confusing","impossible to doubt","hidden","forgettable"], correct: 1 },
+  { q: "Fix the sentence: \"She more taller than him.\"", opts: ["She is more tall than him.","She is taller than him.","She taller than him.","She is tallest than him."], correct: 1 },
+  { q: "What is the synonym of \"conclusion\"?", opts: ["question","outcome","mystery","beginning"], correct: 1 },
+  { q: "Choose the correct word: \"This book ___ by millions of people.\"", opts: ["read","reads","was read","reading"], correct: 2 },
+  { q: "What does \"inconsistent\" mean?", opts: ["always the same","not matching or steady","very careful","completely true"], correct: 1 },
+  { q: "What is the synonym of \"exhausted\"?", opts: ["energetic","tired","happy","angry"], correct: 1 },
+  { q: "Choose the correct word: \"I wish I ___ more time.\"", opts: ["have","had","having","has"], correct: 1 },
+];
+
+const TEAM_COLORS = ["#2563eb","#dc2626","#16a34a","#ea580c","#7c3aed","#0891b2","#c2703d","#4f46e5"];
+
+function questionForDay(dayIndex, slot){
+  return QUESTIONS[(dayIndex * 5 + slot) % QUESTIONS.length];
+}
+
+/* ============================================================
+   STATE
+   ============================================================ */
+let state = {
+  screen: 'roleSelect',
+  role: null,          // 'teacher' | 'student'
+  teacherAuthed: false,
+  team: null,           // {team_name,color,member_count,total_score,streak_days,last_played_date}
+  memberSlot: null,
+  challenge: null,      // {is_open, challenge_date, day_index}
+  answered: false
+};
+
+const app = document.getElementById('app');
+function todayStr(){ return new Date().toISOString().slice(0,10); }
+
+function render(){
+  if(!supabaseReady && state.screen !== 'roleSelect'){
+    app.innerHTML = `<div class="card"><p class="muted">Connecting…</p></div>`;
+    setTimeout(render, 400);
+    return;
+  }
+  const map = {
+    roleSelect: renderRoleSelect,
+    teacherLogin: renderTeacherLogin,
+    teacherDashboard: renderTeacherDashboard,
+    studentTeamSelect: renderStudentTeamSelect,
+    studentMemberSelect: renderStudentMemberSelect,
+    studentChallenge: renderStudentChallenge,
+    standings: renderStandings,
+  };
+  (map[state.screen] || renderRoleSelect)();
+}
+
+function topbar(rightLabel, rightAction){
+  return `
+    <div class="topbar">
+      <div class="brand">
+        <div class="crest">🏆</div>
+        <div>
+          <h1>The Academy</h1>
+          <div class="sub">English League</div>
+        </div>
+      </div>
+      ${rightLabel ? `<button class="nav-link" onclick="${rightAction}">${rightLabel}</button>` : ''}
+    </div>
+  `;
+}
+
+/* ---------------- Role select ---------------- */
+function renderRoleSelect(){
+  app.innerHTML = `
+    ${topbar()}
+    <div class="card role-card" onclick="goStudentFlow()">
+      <div class="icon">🧑‍🎓</div>
+      <div>
+        <h3>I'm a Student</h3>
+        <p class="muted" style="margin:0;">Join your team and play today's challenge.</p>
+      </div>
+    </div>
+    <div class="card role-card" onclick="goTeacherLogin()">
+      <div class="icon">🧑‍🏫</div>
+      <div>
+        <h3>I'm the Teacher</h3>
+        <p class="muted" style="margin:0;">Manage teams and control today's challenge.</p>
+      </div>
+    </div>
+    <div class="card" style="cursor:pointer;" onclick="goStandings()">
+      <h3>🏅 View League Standings</h3>
+      <p class="muted" style="margin:0;">See how every team is ranked right now.</p>
+    </div>
+  `;
+}
+function goStudentFlow(){ state.screen='studentTeamSelect'; render(); }
+function goTeacherLogin(){ state.screen='teacherLogin'; render(); }
+function goStandings(){ state.screen='standings'; state.returnScreen = state.screen; render(); }
+function goRoleSelect(){ state.screen='roleSelect'; render(); }
+
+/* ---------------- Teacher login ---------------- */
+function renderTeacherLogin(){
+  app.innerHTML = `
+    ${topbar('← Back', 'goRoleSelect()')}
+    <div class="card">
+      <span class="eyebrow">Teacher Access</span>
+      <h2>Enter password</h2>
+      <input type="password" id="pwInput" placeholder="Password">
+      <div id="pwError"></div>
+      <button class="btn btn-primary" onclick="checkPassword()">Enter Dashboard</button>
+    </div>
+  `;
+  document.getElementById('pwInput').focus();
+  document.getElementById('pwInput').addEventListener('keydown', e => { if(e.key==='Enter') checkPassword(); });
+}
+function checkPassword(){
+  const val = document.getElementById('pwInput').value;
+  if(val === TEACHER_PASSWORD){
+    state.teacherAuthed = true;
+    state.screen = 'teacherDashboard';
+    render();
+  } else {
+    document.getElementById('pwError').innerHTML = `<div class="feedback bad">Incorrect password.</div>`;
+  }
+}
+
+/* ---------------- Teacher dashboard ---------------- */
+async function renderTeacherDashboard(){
+  if(!state.teacherAuthed){ state.screen='teacherLogin'; return render(); }
+  app.innerHTML = `
+    ${topbar('Log out', 'goRoleSelect()')}
+    <div class="card"><p class="muted center-note">Loading dashboard…</p></div>
+  `;
+  const [{ data: teams }, { data: challengeRows }] = await Promise.all([
+    supabaseClient.from('teams').select('*').order('created_at', { ascending:true }),
+    supabaseClient.from('challenge_state').select('*').eq('id', 1).maybeSingle()
+  ]);
+  const challenge = challengeRows || { is_open:false, challenge_date:null, day_index:0 };
+  const isOpenToday = challenge.is_open && challenge.challenge_date === todayStr();
+
+  app.innerHTML = `
+    ${topbar('Log out', 'goRoleSelect()')}
+    <div class="card">
+      <span class="eyebrow">Today's Challenge</span>
+      <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:12px;">
+        <span class="status-pill ${isOpenToday ? 'status-open':'status-closed'}">${isOpenToday ? '● OPEN' : '● CLOSED'}</span>
+        <span class="muted" style="font-size:0.8rem;">Day #${challenge.day_index + 1}</span>
+      </div>
+      ${isOpenToday
+        ? `<button class="btn btn-danger" onclick="endChallenge()">End Today's Challenge</button>`
+        : `<button class="btn btn-accent" onclick="startChallenge(${challenge.day_index})">▶ Start Today's Challenge</button>`
+      }
+    </div>
+
+    <div class="card">
+      <span class="eyebrow">Teams (${teams ? teams.length : 0})</span>
+      <h2>Manage Teams</h2>
+      <div id="teamsList">
+        ${(teams||[]).map(t => `
+          <div class="team-row">
+            <div class="team-row-left">
+              <div class="crest-circle" style="background:${t.color}">${teamInitials(t.team_name)}</div>
+              <div>
+                <div class="team-name">${escapeHtml(t.team_name)}</div>
+                <div class="team-meta">${t.member_count} members · ${t.total_score} pts · 🔥${t.streak_days}d</div>
+              </div>
+            </div>
+            <button class="nav-link" style="color:var(--bad);" onclick="deleteTeam('${escapeHtml(t.team_name).replace(/'/g,"\\'")}')">Remove</button>
+          </div>
+        `).join('') || '<p class="muted">No teams yet — add your first team below.</p>'}
+      </div>
+      <div class="divider"></div>
+      <h3>Add a Team</h3>
+      <input type="text" id="newTeamName" placeholder="Team name (e.g. Falcons)" maxlength="24">
+      <p class="muted" style="margin-bottom:8px;">Team color</p>
+      <div class="color-picker" id="colorPicker">
+        ${TEAM_COLORS.map((c,i) => `<div class="color-dot ${i===0?'selected':''}" style="background:${c}" data-color="${c}" onclick="selectColor(this)"></div>`).join('')}
+      </div>
+      <p class="muted" style="margin-bottom:8px;">Members per team</p>
+      <div class="member-grid" id="memberCountPicker">
+        ${[3,4,5,6].map(n => `<button class="member-btn ${n===5?'selected-count':''}" data-count="${n}" onclick="selectMemberCount(this)" style="${n===5?'border-color:var(--accent);':''}">${n}</button>`).join('')}
+      </div>
+      <button class="btn btn-primary" onclick="addTeam()">Add Team</button>
+    </div>
+
+    <div class="card" style="cursor:pointer;" onclick="goStandings()">
+      <h3>🏅 View Full Standings</h3>
+      <p class="muted" style="margin:0;">Open the league table.</p>
+    </div>
+  `;
+}
+
+let selectedColor = TEAM_COLORS[0];
+let selectedMemberCount = 5;
+function selectColor(el){
+  document.querySelectorAll('.color-dot').forEach(d => d.classList.remove('selected'));
+  el.classList.add('selected');
+  selectedColor = el.dataset.color;
+}
+function selectMemberCount(el){
+  document.querySelectorAll('#memberCountPicker .member-btn').forEach(b => b.style.borderColor = 'var(--line)');
+  el.style.borderColor = 'var(--accent)';
+  selectedMemberCount = parseInt(el.dataset.count, 10);
+}
+
+async function addTeam(){
+  const nameEl = document.getElementById('newTeamName');
+  const name = nameEl.value.trim();
+  if(!name) return;
+  try{
+    await supabaseClient.from('teams').insert({
+      team_name: name, color: selectedColor, member_count: selectedMemberCount,
+      total_score: 0, streak_days: 0
+    });
+    renderTeacherDashboard();
+  }catch(e){
+    alert('Could not add team (maybe the name is already used).');
+  }
+}
+
+async function deleteTeam(name){
+  if(!confirm('Remove team "' + name + '"? This cannot be undone.')) return;
+  await supabaseClient.from('teams').delete().eq('team_name', name);
+  renderTeacherDashboard();
+}
+
+async function startChallenge(dayIndex){
+  await supabaseClient.from('challenge_state').update({
+    is_open: true, challenge_date: todayStr(), day_index: dayIndex
+  }).eq('id', 1);
+  renderTeacherDashboard();
+}
+async function endChallenge(){
+  await supabaseClient.from('challenge_state').update({ is_open: false }).eq('id', 1);
+  renderTeacherDashboard();
+}
+
+function teamInitials(name){
+  return name.trim().split(/\s+/).slice(0,2).map(w=>w[0].toUpperCase()).join('');
+}
+
+/* ---------------- Student: pick team ---------------- */
+async function renderStudentTeamSelect(){
+  app.innerHTML = `${topbar('← Back', 'goRoleSelect()')}<div class="card"><p class="muted center-note">Loading teams…</p></div>`;
+  const { data: teams } = await supabaseClient.from('teams').select('*').order('created_at', { ascending:true });
+  app.innerHTML = `
+    ${topbar('← Back', 'goRoleSelect()')}
+    <div class="card">
+      <span class="eyebrow">Join Your Team</span>
+      <h2>Which team are you on?</h2>
+      <div id="teamPickList">
+        ${(!teams || !teams.length) ? '<p class="muted">Your teacher hasn\'t created any teams yet. Ask them to open the Teacher Dashboard.</p>' : ''}
+      </div>
+    </div>
+  `;
+  const listEl = document.getElementById('teamPickList');
+  (teams || []).forEach(t => {
+    const row = document.createElement('div');
+    row.className = 'team-row';
+    row.innerHTML = `
+      <div class="team-row-left">
+        <div class="crest-circle" style="background:${t.color}">${teamInitials(t.team_name)}</div>
+        <div>
+          <div class="team-name">${escapeHtml(t.team_name)}</div>
+          <div class="team-meta">${t.total_score} pts · 🔥${t.streak_days}d streak</div>
+        </div>
+      </div>
+      <span style="color:var(--muted);">›</span>
+    `;
+    row.onclick = () => selectTeam(t);
+    listEl.appendChild(row);
+  });
+}
+function selectTeam(team){
+  state.team = team;
+  state.screen = 'studentMemberSelect';
+  render();
+}
+
+/* ---------------- Student: pick member slot ---------------- */
+function renderStudentMemberSelect(){
+  const t = state.team;
+  app.innerHTML = `
+    ${topbar('← Change team', 'goStudentFlow()')}
+    <div class="card">
+      <div style="display:flex; align-items:center; gap:10px; margin-bottom:14px;">
+        <div class="crest-circle" style="background:${t.color}">${teamInitials(t.team_name)}</div>
+        <h2 style="margin:0;">${escapeHtml(t.team_name)}</h2>
+      </div>
+      <span class="eyebrow">Which member are you?</span>
+      <div class="member-grid">
+        ${Array.from({length: t.member_count}, (_,i) => i+1).map(n => `
+          <button class="member-btn" onclick="selectMember(${n})">Player ${n}</button>
+        `).join('')}
+      </div>
+    </div>
+  `;
+}
+function selectMember(n){
+  state.memberSlot = n;
+  state.screen = 'studentChallenge';
+  render();
+}
+
+/* ---------------- Student: today's challenge ---------------- */
+async function renderStudentChallenge(){
+  app.innerHTML = `${topbar('← Change team', 'goStudentFlow()')}<div class="card"><p class="muted center-note">Checking today's challenge…</p></div>`;
+  const { data: challenge } = await supabaseClient.from('challenge_state').select('*').eq('id',1).maybeSingle();
+  const isOpenToday = challenge && challenge.is_open && challenge.challenge_date === todayStr();
+
+  if(!isOpenToday){
+    const { data: standingsData } = await supabaseClient.from('teams').select('*').order('total_score', { ascending:false }).limit(5);
+    app.innerHTML = `
+      ${topbar('← Change team', 'goStudentFlow()')}
+      <div class="card">
+        <div style="display:flex; align-items:center; gap:10px; margin-bottom:10px;">
+          <div class="crest-circle" style="background:${state.team.color}">${teamInitials(state.team.team_name)}</div>
+          <h2 style="margin:0;">${escapeHtml(state.team.team_name)} · Player ${state.memberSlot}</h2>
+        </div>
+        <span class="status-pill status-closed">● Waiting for your teacher</span>
+        <p class="muted" style="margin-top:10px;">Today's challenge hasn't started yet. Ask your teacher to press "Start Today's Challenge."</p>
+      </div>
+      <div class="card">
+        <h3>🏅 Top Teams Right Now</h3>
+        ${miniStandingsRows(standingsData)}
+        <button class="btn btn-ghost" style="margin-top:10px;" onclick="goStandings()">View Full Standings</button>
+      </div>
+    `;
+    return;
+  }
+
+  // Check if this member already answered today
+  const dateStr = challenge.challenge_date;
+  const { data: existing } = await supabaseClient.from('team_progress')
+    .select('*').eq('team_name', state.team.team_name).eq('challenge_date', dateStr).eq('member_slot', state.memberSlot).maybeSingle();
+
+  if(existing){
+    app.innerHTML = `
+      ${topbar('← Change team', 'goStudentFlow()')}
+      <div class="card">
+        <div style="display:flex; align-items:center; gap:10px; margin-bottom:10px;">
+          <div class="crest-circle" style="background:${state.team.color}">${teamInitials(state.team.team_name)}</div>
+          <h2 style="margin:0;">${escapeHtml(state.team.team_name)} · Player ${state.memberSlot}</h2>
+        </div>
+        <div class="feedback ${existing.correct ? 'ok':'bad'}">${existing.correct ? '✓ You already answered correctly today! Great job.' : '✗ You already answered today. Come back tomorrow!'}</div>
+        <button class="btn btn-ghost" style="margin-top:10px;" onclick="goStandings()">View Standings</button>
+      </div>
+    `;
+    return;
+  }
+
+  const q = questionForDay(challenge.day_index, (state.memberSlot - 1) % 5);
+  app.innerHTML = `
+    ${topbar('← Change team', 'goStudentFlow()')}
+    <div class="card">
+      <div style="display:flex; align-items:center; gap:10px; margin-bottom:10px;">
+        <div class="crest-circle" style="background:${state.team.color}">${teamInitials(state.team.team_name)}</div>
+        <h2 style="margin:0;">${escapeHtml(state.team.team_name)} · Player ${state.memberSlot}</h2>
+      </div>
+      <span class="status-pill status-open">● Day #${challenge.day_index+1} — LIVE</span>
+      <div class="divider"></div>
+      <h3>${q.q}</h3>
+      <div id="options"></div>
+    </div>
+  `;
+  const optsDiv = document.getElementById('options');
+  q.opts.forEach((opt, idx) => {
+    const b = document.createElement('button');
+    b.className = 'mc-option';
+    b.textContent = opt;
+    b.onclick = () => submitAnswer(idx, q, dateStr);
+    optsDiv.appendChild(b);
+  });
+}
+
+function miniStandingsRows(teams){
+  if(!teams || !teams.length) return '<p class="muted">No teams yet.</p>';
+  const medals = ['🥇','🥈','🥉'];
+  return teams.map((t,i) => `
+    <div class="team-row">
+      <div class="team-row-left">
+        <span class="rank-medal" style="width:24px;">${medals[i]||('#'+(i+1))}</span>
+        <div class="crest-circle" style="background:${t.color}; width:30px; height:30px; font-size:0.75rem;">${teamInitials(t.team_name)}</div>
+        <div class="team-name">${escapeHtml(t.team_name)}</div>
+      </div>
+      <div class="team-meta" style="font-weight:700; color:var(--ink);">${t.total_score} pts</div>
+    </div>
+  `).join('');
+}
+
+async function submitAnswer(idx, q, dateStr){
+  const correct = idx === q.correct;
+  const opts = document.querySelectorAll('.mc-option');
+  opts.forEach((el,i) => {
+    el.disabled = true;
+    if(i === q.correct) el.classList.add('correct');
+    else if(i === idx) el.classList.add('wrong');
+  });
+  const fb = document.createElement('div');
+  fb.className = 'feedback ' + (correct ? 'ok' : 'bad');
+  fb.textContent = correct ? '✓ Correct! +20 points for ' + state.team.team_name : '✗ Not quite — no points this time, but thanks for playing!';
+  document.getElementById('options').appendChild(fb);
+
+  try{
+    await supabaseClient.from('team_progress').insert({
+      team_name: state.team.team_name, challenge_date: dateStr,
+      member_slot: state.memberSlot, correct: correct
+    });
+
+    if(correct){
+      const { data: teamRow } = await supabaseClient.from('teams').select('*').eq('team_name', state.team.team_name).maybeSingle();
+      if(teamRow){
+        const newScore = teamRow.total_score + 20;
+        let newStreak = teamRow.streak_days;
+        const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0,10);
+        if(teamRow.last_played_date !== dateStr){
+          newStreak = (teamRow.last_played_date === yesterday) ? teamRow.streak_days + 1 : 1;
+        }
+        await supabaseClient.from('teams').update({
+          total_score: newScore, streak_days: newStreak, last_played_date: dateStr
+        }).eq('team_name', state.team.team_name);
+        state.team.total_score = newScore;
+        state.team.streak_days = newStreak;
+      }
+    }
+  }catch(e){ console.error('submit failed', e); }
+
+  const doneBtn = document.createElement('button');
+  doneBtn.className = 'btn btn-primary';
+  doneBtn.style.marginTop = '10px';
+  doneBtn.textContent = 'View Standings';
+  doneBtn.onclick = goStandings;
+  document.getElementById('options').appendChild(doneBtn);
+}
+
+/* ---------------- Standings ---------------- */
+async function renderStandings(){
+  app.innerHTML = `${topbar('← Back', 'goBackFromStandings()')}<div class="card"><p class="muted center-note">Loading league table…</p></div>`;
+  const { data: teams } = await supabaseClient.from('teams').select('*').order('total_score', { ascending:false });
+  const medals = ['🥇','🥈','🥉'];
+  app.innerHTML = `
+    ${topbar('← Back', 'goBackFromStandings()')}
+    <div class="card">
+      <span class="eyebrow">League Table</span>
+      <h2>Standings</h2>
+      ${(teams && teams.length) ? `
+        <table class="standings">
+          <tr><th>#</th><th>Team</th><th>Streak</th><th style="text-align:right;">Points</th></tr>
+          ${teams.map((t,i) => `
+            <tr>
+              <td>${medals[i] ? `<span class="rank-medal">${medals[i]}</span>` : (i+1)}</td>
+              <td>
+                <span class="team-swatch" style="background:${t.color}"></span>${escapeHtml(t.team_name)}
+              </td>
+              <td>${t.streak_days > 0 ? `<span class="streak-badge">🔥 ${t.streak_days}d</span>` : '<span class="muted">—</span>'}</td>
+              <td style="text-align:right; font-weight:700;">${t.total_score}</td>
+            </tr>
+          `).join('')}
+        </table>
+      ` : '<p class="muted">No teams yet.</p>'}
+    </div>
+  `;
+}
+function goBackFromStandings(){
+  if(state.team){ state.screen = 'studentChallenge'; }
+  else { state.screen = 'roleSelect'; }
+  render();
+}
+
+function escapeHtml(str){
+  const d = document.createElement('div');
+  d.textContent = str;
+  return d.innerHTML;
+}
+
+render();
+</script>
+</body>
+</html>
