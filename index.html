@@ -551,30 +551,29 @@ async function renderTeacherDashboard(){
     <div class="card">
       <span class="eyebrow">Students (${studentList.length})</span>
       <h2>Manage Students</h2>
+      <p class="muted">Add each student by name to generate their code, then assign them to a team below. Students without a team yet can't start the challenge.</p>
       <div id="studentsList">
         ${studentList.length ? studentList.map(s => `
-          <div class="student-row">
-            <div>
+          <div class="student-row" style="flex-direction:column; align-items:stretch; gap:8px; padding:12px 0;">
+            <div style="display:flex; align-items:center; justify-content:space-between;">
               <strong>${escapeHtml(s.student_name)}</strong>
-              <span class="muted"> · ${escapeHtml(s.team_name)}</span>
+              <div style="display:flex; align-items:center; gap:8px;">
+                <span class="code-chip">${escapeHtml(s.code)}</span>
+                <button class="nav-link" style="color:var(--bad); padding:2px 4px;" onclick="deleteStudent('${escapeHtml(s.code)}')">✕</button>
+              </div>
             </div>
-            <div style="display:flex; align-items:center; gap:8px;">
-              <span class="code-chip">${escapeHtml(s.code)}</span>
-              <button class="nav-link" style="color:var(--bad); padding:2px 4px;" onclick="deleteStudent('${escapeHtml(s.code)}')">✕</button>
-            </div>
+            <select onchange="assignStudentTeam('${escapeHtml(s.code)}', this.value)" style="margin-bottom:0;">
+              <option value="" ${!s.team_name ? 'selected' : ''}>— Unassigned —</option>
+              ${teamList.map(t => `<option value="${escapeHtml(t.team_name)}" ${s.team_name===t.team_name?'selected':''}>${escapeHtml(t.team_name)}</option>`).join('')}
+            </select>
           </div>
         `).join('') : '<p class="muted">No students yet — add your first student below.</p>'}
       </div>
       <div class="divider"></div>
       <h3>Add a Student</h3>
-      ${!teamList.length ? '<p class="muted">Add a team first before adding students.</p>' : `
-        <input type="text" id="newStudentName" placeholder="Student name" maxlength="40">
-        <select id="newStudentTeam">
-          ${teamList.map(t => `<option value="${escapeHtml(t.team_name)}">${escapeHtml(t.team_name)}</option>`).join('')}
-        </select>
-        <button class="btn btn-primary" onclick="addStudent()">Add Student &amp; Generate Code</button>
-        <div id="newStudentResult"></div>
-      `}
+      <input type="text" id="newStudentName" placeholder="Student name" maxlength="40">
+      <button class="btn btn-primary" onclick="addStudent()">Add Student &amp; Generate Code</button>
+      <div id="newStudentResult"></div>
     </div>
 
     <div class="card" style="cursor:pointer;" onclick="goStandings()">
@@ -615,20 +614,23 @@ function generateCode(){
 
 async function addStudent(){
   const nameEl = document.getElementById('newStudentName');
-  const teamEl = document.getElementById('newStudentTeam');
   const name = nameEl.value.trim();
-  const teamName = teamEl.value;
-  if(!name || !teamName) return;
+  if(!name) return;
   const code = generateCode();
   try{
-    await supabaseClient.from('student_codes').insert({ code, student_name: name, team_name: teamName });
+    await supabaseClient.from('student_codes').insert({ code, student_name: name, team_name: null });
     document.getElementById('newStudentResult').innerHTML =
-      `<div class="feedback ok">✓ Added! ${escapeHtml(name)}'s code is <strong>${code}</strong> — give this to them.</div>`;
+      `<div class="feedback ok">✓ Added! ${escapeHtml(name)}'s code is <strong>${code}</strong>. Now assign them to a team below.</div>`;
     nameEl.value = '';
     renderTeacherDashboard();
   }catch(e){
     alert('Could not add student. Try again.');
   }
+}
+
+async function assignStudentTeam(code, teamName){
+  await supabaseClient.from('student_codes').update({ team_name: teamName || null }).eq('code', code);
+  renderTeacherDashboard();
 }
 
 async function deleteStudent(code){
@@ -673,6 +675,7 @@ async function submitCode(){
   try{
     const { data: codeRow } = await supabaseClient.from('student_codes').select('*').eq('code', code).maybeSingle();
     if(!codeRow){ errEl.innerHTML = `<div class="feedback bad">That code isn't recognized. Check with your teacher.</div>`; return; }
+    if(!codeRow.team_name){ errEl.innerHTML = `<div class="feedback bad">Hi ${escapeHtml(codeRow.student_name)}! Your teacher hasn't assigned you to a team yet. Check back soon.</div>`; return; }
     const { data: team } = await supabaseClient.from('teams').select('*').eq('team_name', codeRow.team_name).maybeSingle();
     if(!team){ errEl.innerHTML = `<div class="feedback bad">Your team could not be found. Ask your teacher to check.</div>`; return; }
     state.team = team;
