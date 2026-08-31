@@ -296,7 +296,8 @@ function tryInitSupabase(){
 tryInitSupabase();
 
 /* ============================================================
-   QUESTION BANKS — three mini-games rotate through each day
+   QUESTION BANKS — five mini-games rotate through each day,
+   each with a large, varied pool so content stays fresh for weeks.
    ============================================================ */
 const MCQ_BANK = [
   { q: "Choose the correct word: \"She ___ to the store every day.\"", opts: ["go","goes","going","gone"], correct: 1 },
@@ -314,6 +315,21 @@ const MCQ_BANK = [
   { q: "Choose the correct word: \"By next year, I ___ my degree.\"", opts: ["will finish","will have finished","finished","am finishing"], correct: 1 },
   { q: "What does \"unmistakable\" mean?", opts: ["confusing","impossible to doubt","hidden","forgettable"], correct: 1 },
   { q: "What is the synonym of \"conclusion\"?", opts: ["question","outcome","mystery","beginning"], correct: 1 },
+  { q: "Choose the correct word: \"This book ___ by millions of people.\"", opts: ["read","reads","was read","reading"], correct: 2 },
+  { q: "What does \"inconsistent\" mean?", opts: ["always the same","not matching or steady","very careful","completely true"], correct: 1 },
+  { q: "Choose the correct word: \"I wish I ___ more time.\"", opts: ["have","had","having","has"], correct: 1 },
+  { q: "What is the synonym of \"exhausted\"?", opts: ["energetic","tired","happy","angry"], correct: 1 },
+  { q: "Fix the sentence: \"She more taller than him.\"", opts: ["She is more tall than him.","She is taller than him.","She taller than him.","She is tallest than him."], correct: 1 },
+  { q: "Choose the correct word: \"Neither of the answers ___ correct.\"", opts: ["is","are","were","be"], correct: 0 },
+  { q: "What does \"meticulous\" mean?", opts: ["careless","very careful and precise","fast","confused"], correct: 1 },
+  { q: "Fix the sentence: \"I am agree with you.\"", opts: ["I am agree with you.","I agree with you.","I do agree with you.","I am agreeing with you."], correct: 1 },
+  { q: "What is the opposite of \"transparent\"?", opts: ["clear","opaque","bright","thin"], correct: 1 },
+  { q: "Choose the correct word: \"She has been working here ___ 2018.\"", opts: ["for","since","during","from"], correct: 1 },
+  { q: "What does \"ambiguous\" mean?", opts: ["very clear","open to more than one interpretation","completely wrong","extremely simple"], correct: 1 },
+  { q: "Fix the sentence: \"Everyone have finished their homework.\"", opts: ["Everyone have finished their homework.","Everyone has finished their homework.","Everyone having finished their homework.","Everyone has finish their homework."], correct: 1 },
+  { q: "What is the synonym of \"persuade\"?", opts: ["convince","confuse","ignore","refuse"], correct: 0 },
+  { q: "Choose the correct word: \"By the time you arrive, I ___ dinner.\"", opts: ["will cook","will have cooked","cook","am cooking"], correct: 1 },
+  { q: "What does \"resilient\" mean?", opts: ["easily broken","able to recover quickly from difficulty","very slow","always angry"], correct: 1 },
 ];
 
 const FILL_BANK = [
@@ -327,6 +343,16 @@ const FILL_BANK = [
   { prompt: "By the time we arrived, the movie ___ (already / start).", answers: ["had already started","already started"] },
   { prompt: "She speaks English ___ (fluent).", answers: ["fluently"] },
   { prompt: "We have ___ (live) here since 2019.", answers: ["lived"] },
+  { prompt: "He ___ (study) English for three years now.", answers: ["has studied","has been studying"] },
+  { prompt: "___ you like some tea?", answers: ["would"] },
+  { prompt: "This is the ___ (good) restaurant in town.", answers: ["best"] },
+  { prompt: "I have never ___ (see) such a beautiful place.", answers: ["seen"] },
+  { prompt: "She acted as ___ nothing had happened.", answers: ["if","though"] },
+  { prompt: "The report needs to be finished ___ Friday.", answers: ["by"] },
+  { prompt: "He apologized ___ being late.", answers: ["for"] },
+  { prompt: "I'm looking forward ___ (see) you soon.", answers: ["to seeing"] },
+  { prompt: "___ I were you, I would apologize.", answers: ["if"] },
+  { prompt: "This dress is ___ (expensive) than that one.", answers: ["more expensive"] },
 ];
 
 const SCRAMBLE_BANK = [
@@ -340,14 +366,62 @@ const SCRAMBLE_BANK = [
   { word: "unmistakable", hint: "impossible to doubt" },
   { word: "exhausted", hint: "very tired" },
   { word: "inconsistent", hint: "not matching or steady" },
+  { word: "meticulous", hint: "very careful and precise" },
+  { word: "transparent", hint: "easy to see through" },
+  { word: "ambiguous", hint: "having more than one meaning" },
+  { word: "persuade", hint: "to convince someone" },
+  { word: "resilient", hint: "able to recover quickly" },
+  { word: "curious", hint: "eager to learn or know" },
+  { word: "gratitude", hint: "feeling of being thankful" },
+  { word: "hesitate", hint: "to pause before doing something" },
+  { word: "flexible", hint: "able to adapt easily" },
+  { word: "optimistic", hint: "hopeful about the future" },
 ];
 
-const GAME_TYPES = ['mcq','fill','scramble'];
+const ODD_BANK = [
+  { words: ["apple","banana","chair","grape"], oddIndex: 2, category: "fruits" },
+  { words: ["run","jump","table","swim"], oddIndex: 2, category: "verbs" },
+  { words: ["happy","joyful","content","tired"], oddIndex: 3, category: "words meaning glad" },
+  { words: ["red","blue","circle","green"], oddIndex: 2, category: "colors" },
+  { words: ["doctor","teacher","hammer","engineer"], oddIndex: 2, category: "professions" },
+  { words: ["quickly","slowly","carefully","happy"], oddIndex: 3, category: "adverbs" },
+  { words: ["dog","cat","fish","rock"], oddIndex: 3, category: "animals" },
+  { words: ["Monday","Tuesday","January","Friday"], oddIndex: 2, category: "days of the week" },
+  { words: ["big","large","huge","tiny"], oddIndex: 3, category: "words meaning large" },
+  { words: ["book","pen","pencil","apple"], oddIndex: 3, category: "school supplies" },
+  { words: ["angry","furious","upset","calm"], oddIndex: 3, category: "words meaning angry" },
+  { words: ["ocean","river","lake","mountain"], oddIndex: 3, category: "bodies of water" },
+  { words: ["fast","rapid","quick","slow"], oddIndex: 3, category: "words meaning fast" },
+  { words: ["laptop","phone","tablet","banana"], oddIndex: 3, category: "electronic devices" },
+  { words: ["begin","start","commence","finish"], oddIndex: 3, category: "words meaning to start" },
+];
+
+const TF_BANK = [
+  { statement: "The word \"happy\" means the same as \"sad\".", answer: false },
+  { statement: "\"She has finished her homework\" is the present perfect tense.", answer: true },
+  { statement: "\"Quickly\" is an adjective.", answer: false },
+  { statement: "\"Ancient\" means very old.", answer: true },
+  { statement: "\"I goed to school\" is correct grammar.", answer: false },
+  { statement: "\"Reluctant\" means eager and willing.", answer: false },
+  { statement: "The plural of \"child\" is \"childs\".", answer: false },
+  { statement: "\"Betray\" means to break someone's trust.", answer: true },
+  { statement: "\"Generous\" means selfish.", answer: false },
+  { statement: "\"They was late\" is grammatically correct.", answer: false },
+  { statement: "\"Exhausted\" means very tired.", answer: true },
+  { statement: "A synonym is a word with the opposite meaning.", answer: false },
+  { statement: "\"Meticulous\" describes someone who is careless.", answer: false },
+  { statement: "\"By 2025, I will have graduated\" uses the future perfect tense.", answer: true },
+  { statement: "\"Fewer\" is used with countable nouns, like \"fewer apples\".", answer: true },
+];
+
+const GAME_TYPES = ['mcq','fill','scramble','oddOneOut','truefalse'];
 const TEAM_COLORS = ["#2563eb","#dc2626","#16a34a","#ea580c","#7c3aed","#0891b2","#c2703d","#4f46e5"];
 
 function mcqForDay(dayIndex){ return MCQ_BANK[dayIndex % MCQ_BANK.length]; }
 function fillForDay(dayIndex){ return FILL_BANK[dayIndex % FILL_BANK.length]; }
 function scrambleForDay(dayIndex){ return SCRAMBLE_BANK[dayIndex % SCRAMBLE_BANK.length]; }
+function oddForDay(dayIndex){ return ODD_BANK[dayIndex % ODD_BANK.length]; }
+function tfForDay(dayIndex){ return TF_BANK[dayIndex % TF_BANK.length]; }
 
 function shuffleLetters(word){
   let letters = word.split('');
@@ -558,6 +632,7 @@ async function renderTeacherDashboard(){
       <p class="muted" style="margin-bottom:8px;">Max students on this team</p>
       <input type="number" id="newTeamMaxMembers" min="1" max="99" value="5" style="max-width:100px;">
       <button class="btn btn-primary" onclick="addTeam()">Add Team</button>
+      <div id="newTeamResult"></div>
     </div>
 
     <div class="card">
@@ -607,13 +682,17 @@ function selectColor(el){
 async function addTeam(){
   const nameEl = document.getElementById('newTeamName');
   const maxEl = document.getElementById('newTeamMaxMembers');
+  const resultEl = document.getElementById('newTeamResult');
   const name = nameEl.value.trim();
   const maxMembers = Math.max(1, parseInt(maxEl.value, 10) || 5);
   if(!name) return;
-  try{
-    await supabaseClient.from('teams').insert({ team_name: name, color: selectedColor, max_members: maxMembers, total_score: 0, streak_days: 0 });
-    renderTeacherDashboard();
-  }catch(e){ alert('Could not add team (maybe the name is already used).'); }
+  resultEl.innerHTML = `<p class="muted">Adding…</p>`;
+  const result = await supabaseClient.from('teams').insert({ team_name: name, color: selectedColor, max_members: maxMembers, total_score: 0, streak_days: 0 });
+  if(result && result.error){
+    resultEl.innerHTML = `<div class="feedback bad">Could not add team: ${escapeHtml(result.error.message || String(result.error))}</div>`;
+    return;
+  }
+  renderTeacherDashboard();
 }
 
 async function updateMaxMembers(teamName){
@@ -849,6 +928,54 @@ function renderGameStage(challenge, dateStr, gameType, doneTypes){
     document.getElementById('scrambleInput').focus();
     document.getElementById('scrambleSubmitBtn').onclick = () => checkScrambleAnswer(q.word, dateStr);
     document.getElementById('scrambleInput').addEventListener('keydown', e => { if(e.key==='Enter') checkScrambleAnswer(q.word, dateStr); });
+    return;
+  }
+
+  if(gameType === 'oddOneOut'){
+    const q = oddForDay(challenge.day_index);
+    app.innerHTML = header + `
+      <span class="eyebrow">Odd One Out</span>
+      <h3>Which word doesn't belong with the others?</h3>
+      <p class="muted">Hint: the other three are ${escapeHtml(q.category)}.</p>
+      <div id="gameArea"></div>
+    </div>`;
+    const area = document.getElementById('gameArea');
+    q.words.forEach((word, idx) => {
+      const b = document.createElement('button');
+      b.className = 'mc-option';
+      b.textContent = word;
+      b.onclick = () => submitGameAnswer('oddOneOut', idx === q.oddIndex, dateStr, () => {
+        const opts = document.querySelectorAll('.mc-option');
+        opts.forEach((el,i)=>{ el.disabled=true; if(i===q.oddIndex) el.classList.add('correct'); else if(i===idx) el.classList.add('wrong'); });
+      });
+      area.appendChild(b);
+    });
+    return;
+  }
+
+  if(gameType === 'truefalse'){
+    const q = tfForDay(challenge.day_index);
+    app.innerHTML = header + `
+      <span class="eyebrow">True or False</span>
+      <h3>${escapeHtml(q.statement)}</h3>
+      <div id="gameArea"></div>
+    </div>`;
+    const area = document.getElementById('gameArea');
+    [['True', true], ['False', false]].forEach(([label, val]) => {
+      const b = document.createElement('button');
+      b.className = 'mc-option';
+      b.textContent = label;
+      b.onclick = () => submitGameAnswer('truefalse', val === q.answer, dateStr, () => {
+        const opts = document.querySelectorAll('.mc-option');
+        opts.forEach((el,i)=>{
+          el.disabled = true;
+          const isCorrectBtn = (i===0 && q.answer===true) || (i===1 && q.answer===false);
+          if(isCorrectBtn) el.classList.add('correct');
+          else if(el.textContent === label) el.classList.add('wrong');
+        });
+      });
+      area.appendChild(b);
+    });
     return;
   }
 }
