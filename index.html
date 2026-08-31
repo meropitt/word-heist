@@ -615,17 +615,18 @@ function generateCode(){
 async function addStudent(){
   const nameEl = document.getElementById('newStudentName');
   const name = nameEl.value.trim();
+  const resultEl = document.getElementById('newStudentResult');
   if(!name) return;
   const code = generateCode();
-  try{
-    await supabaseClient.from('student_codes').insert({ code, student_name: name, team_name: null });
-    document.getElementById('newStudentResult').innerHTML =
-      `<div class="feedback ok">✓ Added! ${escapeHtml(name)}'s code is <strong>${code}</strong>. Now assign them to a team below.</div>`;
-    nameEl.value = '';
-    renderTeacherDashboard();
-  }catch(e){
-    alert('Could not add student. Try again.');
+  resultEl.innerHTML = `<p class="muted">Adding…</p>`;
+  const result = await supabaseClient.from('student_codes').insert({ code, student_name: name, team_name: null });
+  if(result && result.error){
+    resultEl.innerHTML = `<div class="feedback bad">Could not add student: ${escapeHtml(result.error.message || String(result.error))}</div>`;
+    return;
   }
+  resultEl.innerHTML = `<div class="feedback ok">✓ Added! ${escapeHtml(name)}'s code is <strong>${code}</strong>. Now assign them to a team below.</div>`;
+  nameEl.value = '';
+  renderTeacherDashboard();
 }
 
 async function assignStudentTeam(code, teamName){
