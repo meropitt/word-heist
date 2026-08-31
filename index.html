@@ -525,18 +525,28 @@ async function renderTeacherDashboard(){
       <span class="eyebrow">Teams (${teamList.length})</span>
       <h2>Manage Teams</h2>
       <div id="teamsList">
-        ${teamList.map(t => `
-          <div class="team-row">
-            <div class="team-row-left">
-              <div class="crest-circle" style="background:${t.color}">${teamInitials(t.team_name)}</div>
-              <div>
-                <div class="team-name">${escapeHtml(t.team_name)}</div>
-                <div class="team-meta">${studentList.filter(s=>s.team_name===t.team_name).length} students · ${t.total_score} pts · 🔥${t.streak_days}d</div>
+        ${teamList.map(t => {
+          const count = studentList.filter(s=>s.team_name===t.team_name).length;
+          const full = count >= t.max_members;
+          return `
+          <div class="team-row" style="flex-direction:column; align-items:stretch; gap:8px;">
+            <div style="display:flex; align-items:center; justify-content:space-between;">
+              <div class="team-row-left">
+                <div class="crest-circle" style="background:${t.color}">${teamInitials(t.team_name)}</div>
+                <div>
+                  <div class="team-name">${escapeHtml(t.team_name)}</div>
+                  <div class="team-meta">${t.total_score} pts · 🔥${t.streak_days}d</div>
+                </div>
               </div>
+              <button class="nav-link" style="color:var(--bad);" onclick="deleteTeam('${escapeHtml(t.team_name).replace(/'/g,"\\'")}')">Remove</button>
             </div>
-            <button class="nav-link" style="color:var(--bad);" onclick="deleteTeam('${escapeHtml(t.team_name).replace(/'/g,"\\'")}')">Remove</button>
+            <div style="display:flex; align-items:center; gap:8px;">
+              <span class="muted" style="font-size:0.82rem;">Students: <strong style="color:${full?'var(--bad)':'var(--ink)'};">${count} / </strong></span>
+              <input type="number" min="1" max="99" value="${t.max_members}" id="maxMembers-${escapeHtml(t.team_name)}" style="width:70px; margin-bottom:0; padding:6px 8px; text-align:center;">
+              <button class="nav-link" onclick="updateMaxMembers('${escapeHtml(t.team_name).replace(/'/g,"\\'")}')">Save</button>
+            </div>
           </div>
-        `).join('') || '<p class="muted">No teams yet — add your first team below.</p>'}
+        `;}).join('') || '<p class="muted">No teams yet — add your first team below.</p>'}
       </div>
       <div class="divider"></div>
       <h3>Add a Team</h3>
@@ -545,29 +555,34 @@ async function renderTeacherDashboard(){
       <div class="color-picker" id="colorPicker">
         ${TEAM_COLORS.map((c,i) => `<div class="color-dot ${i===0?'selected':''}" style="background:${c}" data-color="${c}" onclick="selectColor(this)"></div>`).join('')}
       </div>
+      <p class="muted" style="margin-bottom:8px;">Max students on this team</p>
+      <input type="number" id="newTeamMaxMembers" min="1" max="99" value="5" style="max-width:100px;">
       <button class="btn btn-primary" onclick="addTeam()">Add Team</button>
     </div>
 
     <div class="card">
       <span class="eyebrow">Students (${studentList.length})</span>
       <h2>Manage Students</h2>
-      <p class="muted">Add each student by name to generate their code, then assign them to a team below. Students without a team yet can't start the challenge.</p>
+      <p class="muted">Add each student by name to generate their code, then assign them to a team. Students without a team yet can't start the challenge.</p>
       <div id="studentsList">
-        ${studentList.length ? studentList.map(s => `
-          <div class="student-row" style="flex-direction:column; align-items:stretch; gap:8px; padding:12px 0;">
-            <div style="display:flex; align-items:center; justify-content:space-between;">
-              <strong>${escapeHtml(s.student_name)}</strong>
-              <div style="display:flex; align-items:center; gap:8px;">
-                <span class="code-chip">${escapeHtml(s.code)}</span>
-                <button class="nav-link" style="color:var(--bad); padding:2px 4px;" onclick="deleteStudent('${escapeHtml(s.code)}')">✕</button>
-              </div>
-            </div>
-            <select onchange="assignStudentTeam('${escapeHtml(s.code)}', this.value)" style="margin-bottom:0;">
-              <option value="" ${!s.team_name ? 'selected' : ''}>— Unassigned —</option>
-              ${teamList.map(t => `<option value="${escapeHtml(t.team_name)}" ${s.team_name===t.team_name?'selected':''}>${escapeHtml(t.team_name)}</option>`).join('')}
-            </select>
-          </div>
-        `).join('') : '<p class="muted">No students yet — add your first student below.</p>'}
+        ${studentList.length ? `
+        <table class="standings">
+          <tr><th>Student</th><th>Team</th><th>Code</th><th></th></tr>
+          ${studentList.map(s => `
+            <tr>
+              <td>${escapeHtml(s.student_name)}</td>
+              <td>
+                <select onchange="assignStudentTeam('${escapeHtml(s.code)}', this.value)" style="margin-bottom:0; padding:6px 8px; font-size:0.85rem;">
+                  <option value="" ${!s.team_name ? 'selected' : ''}>— Unassigned —</option>
+                  ${teamList.map(t => `<option value="${escapeHtml(t.team_name)}" ${s.team_name===t.team_name?'selected':''}>${escapeHtml(t.team_name)}</option>`).join('')}
+                </select>
+              </td>
+              <td><span class="code-chip">${escapeHtml(s.code)}</span></td>
+              <td><button class="nav-link" style="color:var(--bad); padding:2px 4px;" onclick="deleteStudent('${escapeHtml(s.code)}')">✕</button></td>
+            </tr>
+          `).join('')}
+        </table>
+        ` : '<p class="muted">No students yet — add your first student below.</p>'}
       </div>
       <div class="divider"></div>
       <h3>Add a Student</h3>
@@ -591,12 +606,21 @@ function selectColor(el){
 
 async function addTeam(){
   const nameEl = document.getElementById('newTeamName');
+  const maxEl = document.getElementById('newTeamMaxMembers');
   const name = nameEl.value.trim();
+  const maxMembers = Math.max(1, parseInt(maxEl.value, 10) || 5);
   if(!name) return;
   try{
-    await supabaseClient.from('teams').insert({ team_name: name, color: selectedColor, total_score: 0, streak_days: 0 });
+    await supabaseClient.from('teams').insert({ team_name: name, color: selectedColor, max_members: maxMembers, total_score: 0, streak_days: 0 });
     renderTeacherDashboard();
   }catch(e){ alert('Could not add team (maybe the name is already used).'); }
+}
+
+async function updateMaxMembers(teamName){
+  const input = document.getElementById('maxMembers-' + teamName);
+  const val = Math.max(1, parseInt(input.value, 10) || 1);
+  await supabaseClient.from('teams').update({ max_members: val }).eq('team_name', teamName);
+  renderTeacherDashboard();
 }
 
 async function deleteTeam(name){
@@ -630,6 +654,18 @@ async function addStudent(){
 }
 
 async function assignStudentTeam(code, teamName){
+  if(teamName){
+    const [{ data: team }, { data: students }] = await Promise.all([
+      supabaseClient.from('teams').select('*').eq('team_name', teamName).maybeSingle(),
+      supabaseClient.from('student_codes').select('*').eq('team_name', teamName)
+    ]);
+    const currentCount = (students || []).filter(s => s.code !== code).length;
+    if(team && currentCount >= team.max_members){
+      alert('Team "' + teamName + '" is full (' + team.max_members + ' students max). Increase its limit or pick another team.');
+      renderTeacherDashboard();
+      return;
+    }
+  }
   await supabaseClient.from('student_codes').update({ team_name: teamName || null }).eq('code', code);
   renderTeacherDashboard();
 }
@@ -791,9 +827,11 @@ function renderGameStage(challenge, dateStr, gameType, doneTypes){
       <h3>${q.prompt}</h3>
       <input type="text" id="fillInput" placeholder="Type your answer">
       <div id="gameArea"></div>
-      <button class="btn btn-primary" id="fillSubmitBtn" onclick="checkFillAnswer(${JSON.stringify(q.answers)}, '${dateStr}')">Submit</button>
+      <button class="btn btn-primary" id="fillSubmitBtn">Submit</button>
     </div>`;
     document.getElementById('fillInput').focus();
+    document.getElementById('fillSubmitBtn').onclick = () => checkFillAnswer(q.answers, dateStr);
+    document.getElementById('fillInput').addEventListener('keydown', e => { if(e.key==='Enter') checkFillAnswer(q.answers, dateStr); });
     return;
   }
 
@@ -806,9 +844,11 @@ function renderGameStage(challenge, dateStr, gameType, doneTypes){
       <div class="scramble-word">${scrambled}</div>
       <input type="text" id="scrambleInput" placeholder="Unscramble the word">
       <div id="gameArea"></div>
-      <button class="btn btn-primary" id="scrambleSubmitBtn" onclick="checkScrambleAnswer('${q.word}', '${dateStr}')">Submit</button>
+      <button class="btn btn-primary" id="scrambleSubmitBtn">Submit</button>
     </div>`;
     document.getElementById('scrambleInput').focus();
+    document.getElementById('scrambleSubmitBtn').onclick = () => checkScrambleAnswer(q.word, dateStr);
+    document.getElementById('scrambleInput').addEventListener('keydown', e => { if(e.key==='Enter') checkScrambleAnswer(q.word, dateStr); });
     return;
   }
 }
@@ -886,31 +926,84 @@ function miniStandingsRows(teams){
 }
 
 /* ---------------- Standings ---------------- */
+let standingsTab = 'teams';
+
 async function renderStandings(){
   app.innerHTML = `${topbar()}<div class="card"><p class="muted center-note">Loading league table…</p></div>`;
-  const { data: teams } = await supabaseClient.from('teams').select('*').order('total_score', { ascending:false });
+
+  if(standingsTab === 'teams'){
+    const { data: teams } = await supabaseClient.from('teams').select('*').order('total_score', { ascending:false });
+    const medals = ['🥇','🥈','🥉'];
+    app.innerHTML = `
+      ${topbar()}
+      <div class="card">
+        <span class="eyebrow">League Table</span>
+        <h2>Standings</h2>
+        ${standingsTabs()}
+        ${(teams && teams.length) ? `
+          <table class="standings">
+            <tr><th>#</th><th>Team</th><th>Streak</th><th style="text-align:right;">Points</th></tr>
+            ${teams.map((t,i) => `
+              <tr>
+                <td>${medals[i] ? `<span class="rank-medal">${medals[i]}</span>` : (i+1)}</td>
+                <td><span class="team-swatch" style="background:${t.color}"></span>${escapeHtml(t.team_name)}</td>
+                <td>${t.streak_days > 0 ? `<span class="streak-badge">🔥 ${t.streak_days}d</span>` : '<span class="muted">—</span>'}</td>
+                <td style="text-align:right; font-weight:700;">${t.total_score}</td>
+              </tr>
+            `).join('')}
+          </table>
+        ` : '<p class="muted">No teams yet.</p>'}
+      </div>
+    `;
+    return;
+  }
+
+  // Student leaderboard: aggregate points per student from team_progress
+  const [{ data: progress }, { data: students }] = await Promise.all([
+    supabaseClient.from('team_progress').select('*'),
+    supabaseClient.from('student_codes').select('*')
+  ]);
+  const pointsByCode = {};
+  (progress || []).forEach(p => {
+    if(p.correct) pointsByCode[p.code] = (pointsByCode[p.code] || 0) + 15;
+  });
+  const ranked = (students || [])
+    .map(s => ({ name: s.student_name, team: s.team_name, points: pointsByCode[s.code] || 0 }))
+    .sort((a,b) => b.points - a.points);
   const medals = ['🥇','🥈','🥉'];
+
   app.innerHTML = `
     ${topbar()}
     <div class="card">
-      <span class="eyebrow">League Table</span>
-      <h2>Standings</h2>
-      ${(teams && teams.length) ? `
+      <span class="eyebrow">Student Leaderboard</span>
+      <h2>Top Students</h2>
+      ${standingsTabs()}
+      ${ranked.length ? `
         <table class="standings">
-          <tr><th>#</th><th>Team</th><th>Streak</th><th style="text-align:right;">Points</th></tr>
-          ${teams.map((t,i) => `
+          <tr><th>#</th><th>Student</th><th>Team</th><th style="text-align:right;">Points</th></tr>
+          ${ranked.map((s,i) => `
             <tr>
               <td>${medals[i] ? `<span class="rank-medal">${medals[i]}</span>` : (i+1)}</td>
-              <td><span class="team-swatch" style="background:${t.color}"></span>${escapeHtml(t.team_name)}</td>
-              <td>${t.streak_days > 0 ? `<span class="streak-badge">🔥 ${t.streak_days}d</span>` : '<span class="muted">—</span>'}</td>
-              <td style="text-align:right; font-weight:700;">${t.total_score}</td>
+              <td>${escapeHtml(s.name)}</td>
+              <td class="muted">${s.team ? escapeHtml(s.team) : '—'}</td>
+              <td style="text-align:right; font-weight:700;">${s.points}</td>
             </tr>
           `).join('')}
         </table>
-      ` : '<p class="muted">No teams yet.</p>'}
+      ` : '<p class="muted">No students yet.</p>'}
     </div>
   `;
 }
+
+function standingsTabs(){
+  return `
+    <div class="btn-row" style="margin-bottom:14px;">
+      <button class="btn ${standingsTab==='teams' ? 'btn-primary' : 'btn-ghost'}" onclick="switchStandingsTab('teams')">🏆 Teams</button>
+      <button class="btn ${standingsTab==='students' ? 'btn-primary' : 'btn-ghost'}" onclick="switchStandingsTab('students')">👤 Students</button>
+    </div>
+  `;
+}
+function switchStandingsTab(tab){ standingsTab = tab; renderStandings(); }
 
 /* ============================================================
    BOOT — restore where the user left off on refresh
