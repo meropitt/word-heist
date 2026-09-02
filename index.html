@@ -181,6 +181,25 @@
     font-family:monospace; font-weight:700; letter-spacing:1px; background:var(--accent-dim); color:var(--accent);
     padding:2px 8px; border-radius:6px; font-size:0.82rem;
   }
+  @keyframes pulseDanger {
+    0%,100% { opacity: 1; }
+    50% { opacity: 0.5; }
+  }
+  .level-badge{
+    display:inline-flex; align-items:center; gap:4px; font-size:0.72rem; font-weight:700;
+    background: var(--accent-dim); color: var(--accent); padding:2px 8px; border-radius:12px;
+  }
+  .heatmap-row{ display:flex; gap:3px; flex-wrap:wrap; margin-top:6px; }
+  .heatmap-cell{ width:14px; height:14px; border-radius:3px; background: var(--line); }
+  .heatmap-cell.played{ background: var(--ok); }
+  .weak-tag{ font-size:0.72rem; background:#fef2f2; color:var(--bad); padding:2px 8px; border-radius:10px; }
+  .certificate{
+    text-align:center; padding: 30px 20px; border: 3px solid var(--gold);
+    border-radius: 14px; background: linear-gradient(160deg, #fffbeb, #fff);
+  }
+  .certificate .cert-title{ font-family: var(--font-head); font-size:0.75rem; letter-spacing:2px; color:var(--gold); text-transform:uppercase; }
+  .certificate .cert-team{ font-family: var(--font-head); font-size:1.6rem; font-weight:800; margin:10px 0; }
+  .certificate .cert-medal{ font-size:3rem; margin: 6px 0; }
 </style>
 </head>
 <body>
@@ -245,7 +264,11 @@ function createMiniSupabase(url, key){
       },
       then(resolve, reject){ runSelect().then(resolve, reject); },
       insert: async (row) => {
-        try{ await doFetch(table, { method:'POST', headers: baseHeaders, body: JSON.stringify(row) }); return {}; }
+        try{
+          const headers = Object.assign({}, baseHeaders, { Prefer: 'return=representation' });
+          const data = await doFetch(table, { method:'POST', headers, body: JSON.stringify(row) });
+          return { data };
+        }
         catch(e){ return { error: e }; }
       },
       upsert: async (row, opts) => {
@@ -490,6 +513,20 @@ function buildPool(tier){
 }
 const NORMAL_POOL = buildPool('normal');
 const HARD_POOL = buildPool('hard');
+const ALL_POOL = NORMAL_POOL.concat(HARD_POOL);
+
+/* Pick N unique questions for a duel, fixed order, no repeats. */
+function pickDuelQuestions(n){
+  const shuffled = [...ALL_POOL].sort(() => Math.random() - 0.5);
+  return shuffled.slice(0, Math.min(n, shuffled.length)).map(q => q.key);
+}
+function questionByKey(key){
+  return ALL_POOL.find(q => q.key === key);
+}
+
+const DUEL_QUESTION_COUNT = 40;
+const DUEL_KICK_STREAK = 5;
+const DUEL_POINTS = 10;
 
 /* Pick a random question not already used today. If the whole pool has
    been used (very unlikely at 30/day), allow repeats rather than break. */
@@ -506,6 +543,38 @@ const DAILY_SKIP_LIMIT = 5;
 const HARD_MODE_STREAK = 10;
 const POINTS_NORMAL = 15;
 const POINTS_HARD = 25;
+const TEAM_COMPLETION_BONUS = 50;
+
+/* ============================================================
+   LEVELS, BADGES, MYSTERY BONUS
+   ============================================================ */
+const LEVEL_TITLES = [
+  "Rookie","Word Explorer","Grammar Scout","Vocabulary Hunter","Sentence Builder",
+  "Fluency Fighter","Word Wizard","Language Ace","Grammar Guru","Wordsmith",
+  "English Champion","Legend"
+];
+function levelForXP(xp){
+  const level = Math.min(LEVEL_TITLES.length, Math.floor(xp / 100) + 1);
+  return { level, title: LEVEL_TITLES[level - 1] };
+}
+
+const BADGE_INFO = {
+  perfect_day: { icon: '💯', label: 'Perfect Day', desc: '30/30 with zero mistakes' },
+  comeback_kid: { icon: '💪', label: 'Comeback Kid', desc: 'Recovered from 4 mistakes to finish' },
+  first_blood: { icon: '⚡', label: 'First Blood', desc: "First correct answer of the day" },
+};
+
+function levelBadgeHtml(xp){
+  const { level, title } = levelForXP(xp);
+  return `<span class="level-badge">Lv.${level} ${escapeHtml(title)}</span>`;
+}
+
+function fireEmoji(streak){
+  if(streak >= 15) return '🔥🔥🔥';
+  if(streak >= 10) return '🔥🔥';
+  if(streak >= 5) return '🔥';
+  return streak > 0 ? '🔥' : '';
+}
 
 function shuffleLetters(word){
   let letters = word.split('');
@@ -575,6 +644,10 @@ function render(){
     studentCodeEntry: renderStudentCodeEntry,
     studentChallenge: renderStudentChallenge,
     standings: renderStandings,
+    duelCodeEntry: renderDuelCodeEntry,
+    duelList: renderDuelList,
+    duelPlay: renderDuelPlay,
+    teacherDuels: renderTeacherDuels,
   };
   (map[state.screen] || renderRoleSelect)();
 }
@@ -599,6 +672,87 @@ function escapeHtml(str){
   const d = document.createElement('div'); d.textContent = str; return d.innerHTML;
 }
 
+/* ============================================================
+   TEACHER INSIGHTS — MVP of the day, weak-spot report, streak calendar
+   ============================================================ */
+function insightsCardHtml(teamList, studentList, progressList, challenge){
+  const todayDate = challenge.challenge_date;
+  const codeToStudent = {};
+  studentList.forEach(s => codeToStudent[s.code] = s);
+
+  // Today's MVP per team (most points earned today)
+  let mvpRows = '';
+  if(todayDate){
+    const todayRows = progressList.filter(p => p.challenge_date === todayDate);
+    const pointsByCode = {};
+    todayRows.forEach(p => { pointsByCode[p.code] = (pointsByCode[p.code]||0) + (p.points||0); });
+    teamList.forEach(t => {
+      const teamCodes = studentList.filter(s => s.team_name === t.team_name).map(s => s.code);
+      let best = null, bestPts = 0;
+      teamCodes.forEach(c => { if((pointsByCode[c]||0) > bestPts){ bestPts = pointsByCode[c]; best = c; } });
+      if(best){
+        mvpRows += `<div class="student-row"><span>${escapeHtml(t.team_name)}</span><span class="muted">🌟 ${escapeHtml(codeToStudent[best].student_name)} — ${bestPts} pts today</span></div>`;
+      }
+    });
+  }
+
+  // Weak-spot per student (lowest accuracy game_type, min 3 attempts)
+  const byCodeType = {};
+  progressList.forEach(p => {
+    byCodeType[p.code] = byCodeType[p.code] || {};
+    byCodeType[p.code][p.game_type] = byCodeType[p.code][p.game_type] || { correct:0, total:0 };
+    byCodeType[p.code][p.game_type].total++;
+    if(p.correct) byCodeType[p.code][p.game_type].correct++;
+  });
+  const typeLabels = { mcq:'Multiple Choice', fill:'Fill-in-Blank', scramble:'Scramble', oddOneOut:'Odd One Out', truefalse:'True/False' };
+  let weakRows = '';
+  studentList.forEach(s => {
+    const types = byCodeType[s.code];
+    if(!types) return;
+    let weakest = null, weakestAcc = 1;
+    Object.keys(types).forEach(t => {
+      if(types[t].total >= 3){
+        const acc = types[t].correct / types[t].total;
+        if(acc < weakestAcc){ weakestAcc = acc; weakest = t; }
+      }
+    });
+    if(weakest && weakestAcc < 0.6){
+      weakRows += `<div class="student-row"><span>${escapeHtml(s.student_name)}</span><span class="weak-tag">Weak: ${typeLabels[weakest]||weakest} (${Math.round(weakestAcc*100)}%)</span></div>`;
+    }
+  });
+
+  // Streak calendar: last 14 distinct challenge dates each team played
+  const last14 = Array.from({length:14}, (_,i) => {
+    const d = new Date(Date.now() - (13-i)*86400000);
+    return d.toISOString().slice(0,10);
+  });
+  let calendarRows = '';
+  teamList.forEach(t => {
+    const teamCodes = new Set(studentList.filter(s => s.team_name === t.team_name).map(s => s.code));
+    const playedDates = new Set(progressList.filter(p => teamCodes.has(p.code)).map(p => p.challenge_date));
+    calendarRows += `
+      <div style="margin-bottom:8px;">
+        <span class="muted" style="font-size:0.8rem;">${escapeHtml(t.team_name)}</span>
+        <div class="heatmap-row">
+          ${last14.map(d => `<div class="heatmap-cell ${playedDates.has(d)?'played':''}" title="${d}"></div>`).join('')}
+        </div>
+      </div>
+    `;
+  });
+
+  if(!mvpRows && !weakRows && !calendarRows) return '';
+
+  return `
+    <div class="card">
+      <span class="eyebrow">Insights</span>
+      <h2>Class Overview</h2>
+      ${mvpRows ? `<h3 style="margin-top:6px;">🌟 Today's MVPs</h3>${mvpRows}` : ''}
+      ${weakRows ? `<div class="divider"></div><h3>🎯 Needs Practice</h3>${weakRows}` : ''}
+      ${calendarRows ? `<div class="divider"></div><h3>📅 Play Streak (last 14 days)</h3>${calendarRows}` : ''}
+    </div>
+  `;
+}
+
 /* ---------------- Role select ---------------- */
 function renderRoleSelect(){
   app.innerHTML = `
@@ -611,6 +765,10 @@ function renderRoleSelect(){
       <div class="icon">🧑‍🏫</div>
       <div><h3>I'm the Teacher</h3><p class="muted" style="margin:0;">Manage students, teams, and today's challenge.</p></div>
     </div>
+    <div class="card role-card" onclick="goDuels()">
+      <div class="icon">⚔️</div>
+      <div><h3>Challenges</h3><p class="muted" style="margin:0;">Head-to-head duels between teams or players.</p></div>
+    </div>
     <div class="card" style="cursor:pointer;" onclick="goStandings()">
       <h3>🏅 View League Standings</h3>
       <p class="muted" style="margin:0;">See how every team is ranked right now.</p>
@@ -620,6 +778,7 @@ function renderRoleSelect(){
 function goStudentFlow(){ navigateTo('studentCodeEntry'); }
 function goTeacherLogin(){ navigateTo('teacherLogin'); }
 function goStandings(){ navigateTo('standings'); }
+function goDuels(){ navigateTo(state.studentCode ? 'duelList' : 'duelCodeEntry'); }
 function goRoleSelect(){ state.screen='roleSelect'; state.history=[]; persistState(); render(); }
 
 /* ---------------- Teacher login ---------------- */
@@ -651,15 +810,17 @@ async function renderTeacherDashboard(){
   if(!state.teacherAuthed){ navigateTo('teacherLogin'); return; }
   app.innerHTML = `${topbar()}<div class="card"><p class="muted center-note">Loading dashboard…</p></div>`;
 
-  const [{ data: teams }, { data: challengeRows }, { data: students }] = await Promise.all([
+  const [{ data: teams }, { data: challengeRows }, { data: students }, { data: allProgress }] = await Promise.all([
     supabaseClient.from('teams').select('*').order('created_at', { ascending:true }),
     supabaseClient.from('challenge_state').select('*').eq('id', 1).maybeSingle(),
-    supabaseClient.from('student_codes').select('*').order('team_name', { ascending:true })
+    supabaseClient.from('student_codes').select('*').order('team_name', { ascending:true }),
+    supabaseClient.from('team_progress').select('*')
   ]);
   const challenge = challengeRows || { is_open:false, challenge_date:null, day_index:0 };
   const isOpenToday = challenge.is_open && challenge.challenge_date === todayStr();
   const teamList = teams || [];
   const studentList = students || [];
+  const progressList = allProgress || [];
 
   app.innerHTML = `
     ${topbar()}
@@ -678,6 +839,8 @@ async function renderTeacherDashboard(){
         : `<button class="btn btn-accent" onclick="startChallenge(${challenge.day_index})">▶ Start Today's Challenge</button>`
       }
     </div>
+
+    ${insightsCardHtml(teamList, studentList, progressList, challenge)}
 
     <div class="card">
       <span class="eyebrow">Teams (${teamList.length})</span>
@@ -748,6 +911,11 @@ async function renderTeacherDashboard(){
       <input type="text" id="newStudentName" placeholder="Student name" maxlength="40">
       <button class="btn btn-primary" onclick="addStudent()">Add Student &amp; Generate Code</button>
       <div id="newStudentResult"></div>
+    </div>
+
+    <div class="card" style="cursor:pointer;" onclick="navigateTo('teacherDuels')">
+      <h3>⚔️ Manage Challenges</h3>
+      <p class="muted" style="margin:0;">Create head-to-head duels between teams or players.</p>
     </div>
 
     <div class="card" style="cursor:pointer;" onclick="goStandings()">
@@ -881,6 +1049,7 @@ async function submitCode(){
     state.team = team;
     state.studentName = codeRow.student_name;
     state.studentCode = code;
+    state.studentXP = codeRow.xp_points || 0;
     navigateTo('studentChallenge');
   }catch(e){
     errEl.innerHTML = `<div class="feedback bad">Something went wrong. Try again.</div>`;
@@ -923,13 +1092,13 @@ async function renderStudentChallenge(){
   const skips = skipRows || [];
   const answeredCount = rows.length;
   const correctCount = rows.filter(r=>r.correct).length;
-  const wrongCount = rows.filter(r=>!r.correct).length;
+  const wrongCount = rows.filter(r=>!r.correct && !r.is_bonus).length;
   const skipsUsed = skips.length;
 
   const headerInfo = `
     <div style="display:flex; align-items:center; gap:10px; margin-bottom:10px;">
       <div class="crest-circle" style="background:${state.team.color}">${teamInitials(state.team.team_name)}</div>
-      <div><h2 style="margin:0;">${escapeHtml(state.studentName)}</h2><p class="muted" style="margin:0;">${escapeHtml(state.team.team_name)} · Day #${challenge.day_index+1}</p></div>
+      <div><h2 style="margin:0;">${escapeHtml(state.studentName)}</h2><p class="muted" style="margin:0;">${escapeHtml(state.team.team_name)} · Day #${challenge.day_index+1}</p>${levelBadgeHtml(state.studentXP||0)}</div>
     </div>
   `;
 
@@ -961,8 +1130,9 @@ async function renderStudentChallenge(){
   const usedKeys = new Set(rows.map(r => r.question_key));
   const trailingStreak = computeTrailingStreak(rows);
   const useHard = trailingStreak >= HARD_MODE_STREAK;
+  const isBonus = answeredCount === 0; // first question of the day is the Mystery Bonus
   const picked = pickRandomQuestion(usedKeys, useHard);
-  renderQuestionCard(challenge, dateStr, picked, useHard, { answeredCount, correctCount, wrongCount, skipsUsed });
+  renderQuestionCard(challenge, dateStr, picked, useHard, isBonus, { answeredCount, correctCount, wrongCount, skipsUsed, trailingStreak });
 }
 
 function computeTrailingStreak(rows){
@@ -974,26 +1144,32 @@ function computeTrailingStreak(rows){
   return streak;
 }
 
-function statsBar(stats, useHard){
+function statsBar(stats, useHard, isBonus){
   const skipsLeft = DAILY_SKIP_LIMIT - stats.skipsUsed;
+  const danger = stats.wrongCount >= 4;
+  const fire = fireEmoji(stats.trailingStreak);
+  const toHard = Math.max(0, HARD_MODE_STREAK - stats.trailingStreak);
   return `
-    <div style="display:flex; justify-content:space-between; align-items:center; font-family: var(--font-body); color: var(--muted); font-size:0.8rem; margin-bottom:10px;">
-      <span>Question ${stats.answeredCount+1}/${DAILY_QUESTION_LIMIT}</span>
-      <span>❌ ${stats.wrongCount}/${DAILY_WRONG_LIMIT} &nbsp;·&nbsp; ⏭ ${skipsLeft} left</span>
+    <div style="display:flex; justify-content:space-between; align-items:center; font-family: var(--font-body); color: var(--muted); font-size:0.8rem; margin-bottom:6px;">
+      <span>Question ${stats.answeredCount+1}/${DAILY_QUESTION_LIMIT} ${fire ? '<span style="font-size:1rem;">'+fire+'</span>' : ''}</span>
+      <span style="${danger ? 'color:var(--bad); font-weight:800; animation: pulseDanger 1s infinite;' : ''}">❌ ${stats.wrongCount}/${DAILY_WRONG_LIMIT} &nbsp;·&nbsp; ⏭ ${skipsLeft} left</span>
     </div>
-    ${useHard ? `<div class="status-pill" style="background:#fef3c7; color:#92400e; margin-bottom:10px;">⭐ Bonus Round — Harder Question (+${POINTS_HARD} pts)</div>` : ''}
+    ${danger ? `<div class="feedback bad" style="margin-bottom:8px;">⚠ One more mistake and today's challenge locks!</div>` : ''}
+    ${isBonus ? `<div class="status-pill" style="background:#fef9c3; color:#854d0e; margin-bottom:8px; border:1px solid #eab308;">🎁 Mystery Bonus — double points, no penalty if wrong!</div>` : ''}
+    ${useHard ? `<div class="status-pill" style="background:#fef3c7; color:#92400e; margin-bottom:10px;">⭐ Bonus Round — Harder Question (+${POINTS_HARD} pts)</div>` :
+      (toHard > 0 && stats.trailingStreak > 0 ? `<p class="muted" style="font-size:0.78rem; margin-bottom:8px;">🔥 ${toHard} more correct in a row → Bonus Round!</p>` : '')}
   `;
 }
 
-function renderQuestionCard(challenge, dateStr, picked, useHard, stats){
+function renderQuestionCard(challenge, dateStr, picked, useHard, isBonus, stats){
   const header = `
     ${topbar()}
     <div class="card">
       <div style="display:flex; align-items:center; gap:10px; margin-bottom:10px;">
         <div class="crest-circle" style="background:${state.team.color}">${teamInitials(state.team.team_name)}</div>
-        <div><h2 style="margin:0;">${escapeHtml(state.studentName)}</h2><p class="muted" style="margin:0;">${escapeHtml(state.team.team_name)} · Day #${challenge.day_index+1}</p></div>
+        <div><h2 style="margin:0;">${escapeHtml(state.studentName)}</h2><p class="muted" style="margin:0;">${escapeHtml(state.team.team_name)} · Day #${challenge.day_index+1}</p>${levelBadgeHtml(state.studentXP||0)}</div>
       </div>
-      ${statsBar(stats, useHard)}
+      ${statsBar(stats, useHard, isBonus)}
   `;
   const q = picked.data;
 
@@ -1008,7 +1184,7 @@ function renderQuestionCard(challenge, dateStr, picked, useHard, stats){
       const b = document.createElement('button');
       b.className = 'mc-option';
       b.textContent = opt;
-      b.onclick = () => submitGameAnswer(picked, idx === q.correct, dateStr, useHard, stats, () => {
+      b.onclick = () => submitGameAnswer(picked, idx === q.correct, dateStr, useHard, isBonus, stats, () => {
         const opts = document.querySelectorAll('.mc-option');
         opts.forEach((el,i)=>{ el.disabled=true; if(i===q.correct) el.classList.add('correct'); else if(i===idx) el.classList.add('wrong'); });
       });
@@ -1027,8 +1203,8 @@ function renderQuestionCard(challenge, dateStr, picked, useHard, stats){
       <button class="btn btn-primary" id="fillSubmitBtn">Submit</button>
     </div>` + skipButtonHtml(stats.skipsUsed);
     document.getElementById('fillInput').focus();
-    document.getElementById('fillSubmitBtn').onclick = () => checkFillAnswer(picked, dateStr, useHard, stats);
-    document.getElementById('fillInput').addEventListener('keydown', e => { if(e.key==='Enter') checkFillAnswer(picked, dateStr, useHard, stats); });
+    document.getElementById('fillSubmitBtn').onclick = () => checkFillAnswer(picked, dateStr, useHard, isBonus, stats);
+    document.getElementById('fillInput').addEventListener('keydown', e => { if(e.key==='Enter') checkFillAnswer(picked, dateStr, useHard, isBonus, stats); });
     wireSkipButton(dateStr, stats);
     return;
   }
@@ -1044,8 +1220,8 @@ function renderQuestionCard(challenge, dateStr, picked, useHard, stats){
       <button class="btn btn-primary" id="scrambleSubmitBtn">Submit</button>
     </div>` + skipButtonHtml(stats.skipsUsed);
     document.getElementById('scrambleInput').focus();
-    document.getElementById('scrambleSubmitBtn').onclick = () => checkScrambleAnswer(picked, dateStr, useHard, stats);
-    document.getElementById('scrambleInput').addEventListener('keydown', e => { if(e.key==='Enter') checkScrambleAnswer(picked, dateStr, useHard, stats); });
+    document.getElementById('scrambleSubmitBtn').onclick = () => checkScrambleAnswer(picked, dateStr, useHard, isBonus, stats);
+    document.getElementById('scrambleInput').addEventListener('keydown', e => { if(e.key==='Enter') checkScrambleAnswer(picked, dateStr, useHard, isBonus, stats); });
     wireSkipButton(dateStr, stats);
     return;
   }
@@ -1062,7 +1238,7 @@ function renderQuestionCard(challenge, dateStr, picked, useHard, stats){
       const b = document.createElement('button');
       b.className = 'mc-option';
       b.textContent = word;
-      b.onclick = () => submitGameAnswer(picked, idx === q.oddIndex, dateStr, useHard, stats, () => {
+      b.onclick = () => submitGameAnswer(picked, idx === q.oddIndex, dateStr, useHard, isBonus, stats, () => {
         const opts = document.querySelectorAll('.mc-option');
         opts.forEach((el,i)=>{ el.disabled=true; if(i===q.oddIndex) el.classList.add('correct'); else if(i===idx) el.classList.add('wrong'); });
       });
@@ -1083,7 +1259,7 @@ function renderQuestionCard(challenge, dateStr, picked, useHard, stats){
       const b = document.createElement('button');
       b.className = 'mc-option';
       b.textContent = label;
-      b.onclick = () => submitGameAnswer(picked, val === q.answer, dateStr, useHard, stats, () => {
+      b.onclick = () => submitGameAnswer(picked, val === q.answer, dateStr, useHard, isBonus, stats, () => {
         const opts = document.querySelectorAll('.mc-option');
         opts.forEach((el,i)=>{
           el.disabled = true;
@@ -1120,48 +1296,65 @@ async function useSkip(dateStr, stats){
   renderStudentChallenge();
 }
 
-function checkFillAnswer(picked, dateStr, useHard, stats){
+function checkFillAnswer(picked, dateStr, useHard, isBonus, stats){
   const q = picked.data;
   const val = document.getElementById('fillInput').value.trim().toLowerCase();
   const correct = q.answers.some(a => a.toLowerCase() === val);
   document.getElementById('fillInput').disabled = true;
   document.getElementById('fillSubmitBtn').disabled = true;
-  submitGameAnswer(picked, correct, dateStr, useHard, stats, () => {
+  submitGameAnswer(picked, correct, dateStr, useHard, isBonus, stats, () => {
     document.getElementById('gameArea').innerHTML =
       `<div class="feedback ${correct?'ok':'bad'}">${correct ? '✓ Correct!' : '✗ Not quite. Accepted answer: ' + escapeHtml(q.answers[0])}</div>`;
   });
 }
 
-function checkScrambleAnswer(picked, dateStr, useHard, stats){
+function checkScrambleAnswer(picked, dateStr, useHard, isBonus, stats){
   const q = picked.data;
   const val = document.getElementById('scrambleInput').value.trim().toLowerCase();
   const correct = val === q.word.toLowerCase();
   document.getElementById('scrambleInput').disabled = true;
   document.getElementById('scrambleSubmitBtn').disabled = true;
-  submitGameAnswer(picked, correct, dateStr, useHard, stats, () => {
+  submitGameAnswer(picked, correct, dateStr, useHard, isBonus, stats, () => {
     document.getElementById('gameArea').innerHTML =
       `<div class="feedback ${correct?'ok':'bad'}">${correct ? '✓ Correct!' : '✗ Not quite. The word was: ' + escapeHtml(q.word)}</div>`;
   });
 }
 
-async function submitGameAnswer(picked, correct, dateStr, useHard, stats, uiUpdateFn){
+async function submitGameAnswer(picked, correct, dateStr, useHard, isBonus, stats, uiUpdateFn){
   const skipBtn = document.getElementById('skipBtn');
   if(skipBtn) skipBtn.disabled = true;
   uiUpdateFn();
-  const points = correct ? (useHard ? POINTS_HARD : POINTS_NORMAL) : 0;
+  let points = correct ? (useHard ? POINTS_HARD : POINTS_NORMAL) : 0;
+  if(isBonus) points *= 2;
   const fb = document.createElement('div');
   fb.className = 'feedback ' + (correct ? 'ok' : 'bad');
-  fb.textContent = correct ? ('✓ +' + points + ' points for ' + state.team.team_name) : '✗ No points this round — nice try!';
+  fb.textContent = correct
+    ? ('✓ +' + points + ' points for ' + state.team.team_name + (isBonus ? ' (Mystery Bonus x2!)' : ''))
+    : (isBonus ? '✗ No points, but the Mystery Bonus never counts against your 5 mistakes!' : '✗ No points this round — nice try!');
   document.getElementById('gameArea').appendChild(fb);
 
+  const newAnsweredCount = stats.answeredCount + 1;
+  const badgeMsgs = [];
+
   try{
+    // First Blood: is this the very first correct answer of the day, across everyone?
+    if(correct){
+      const { data: anyCorrectToday } = await supabaseClient.from('team_progress').select('code').eq('challenge_date', dateStr).eq('correct', true).limit(1);
+      if(!anyCorrectToday || !anyCorrectToday.length){
+        await awardBadge('first_blood', dateStr);
+        badgeMsgs.push(BADGE_INFO.first_blood);
+      }
+    }
+
     await supabaseClient.from('team_progress').insert({
       code: state.studentCode, challenge_date: dateStr,
-      question_number: stats.answeredCount + 1,
+      question_number: newAnsweredCount,
       game_type: picked.type, question_key: picked.key,
-      correct: correct, points: points
+      correct: correct, points: points, is_bonus: isBonus
     });
+
     if(correct){
+      // Team score + streak
       const { data: teamRow } = await supabaseClient.from('teams').select('*').eq('team_name', state.team.team_name).maybeSingle();
       if(teamRow){
         const newScore = teamRow.total_score + points;
@@ -1174,8 +1367,37 @@ async function submitGameAnswer(picked, correct, dateStr, useHard, stats, uiUpda
         state.team.total_score = newScore;
         state.team.streak_days = newStreak;
       }
+      // XP / level
+      const { data: codeRow } = await supabaseClient.from('student_codes').select('*').eq('code', state.studentCode).maybeSingle();
+      if(codeRow){
+        const newXP = (codeRow.xp_points || 0) + points;
+        await supabaseClient.from('student_codes').update({
+          xp_points: newXP,
+          lifetime_correct: (codeRow.lifetime_correct || 0) + 1
+        }).eq('code', state.studentCode);
+        state.studentXP = newXP;
+      }
+    }
+
+    // Completion badges + team full-completion bonus, once the 30th question is answered
+    if(newAnsweredCount >= DAILY_QUESTION_LIMIT){
+      const { data: allRows } = await supabaseClient.from('team_progress').select('*').eq('code', state.studentCode).eq('challenge_date', dateStr);
+      const realRows = allRows || [];
+      const wrongToday = realRows.filter(r => !r.correct && !r.is_bonus).length;
+      if(wrongToday === 0){ await awardBadge('perfect_day', dateStr); badgeMsgs.push(BADGE_INFO.perfect_day); }
+      else if(wrongToday >= 4){ await awardBadge('comeback_kid', dateStr); badgeMsgs.push(BADGE_INFO.comeback_kid); }
+      await maybeAwardTeamCompletionBonus(dateStr);
     }
   }catch(e){ console.error('submit failed', e); }
+
+  if(badgeMsgs.length){
+    const badgeBanner = document.createElement('div');
+    badgeBanner.className = 'feedback ok';
+    badgeBanner.style.background = '#fef9c3';
+    badgeBanner.style.color = '#854d0e';
+    badgeBanner.innerHTML = badgeMsgs.map(b => `🏅 New Badge: ${b.icon} ${b.label} — ${b.desc}`).join('<br>');
+    document.getElementById('gameArea').appendChild(badgeBanner);
+  }
 
   const nextBtn = document.createElement('button');
   nextBtn.className = 'btn btn-primary';
@@ -1183,6 +1405,29 @@ async function submitGameAnswer(picked, correct, dateStr, useHard, stats, uiUpda
   nextBtn.textContent = 'Continue →';
   nextBtn.onclick = () => renderStudentChallenge();
   document.getElementById('gameArea').appendChild(nextBtn);
+}
+
+async function awardBadge(badgeKey, dateStr){
+  try{ await supabaseClient.from('badges').insert({ code: state.studentCode, badge_key: badgeKey, earned_date: dateStr }); }
+  catch(e){ /* likely already awarded today, ignore */ }
+}
+
+async function maybeAwardTeamCompletionBonus(dateStr){
+  const { data: teamStudents } = await supabaseClient.from('student_codes').select('*').eq('team_name', state.team.team_name);
+  if(!teamStudents || !teamStudents.length) return;
+  const counts = await Promise.all(teamStudents.map(async s => {
+    const { data } = await supabaseClient.from('team_progress').select('question_number').eq('code', s.code).eq('challenge_date', dateStr);
+    return (data || []).length;
+  }));
+  const allFinished = counts.every(c => c >= DAILY_QUESTION_LIMIT);
+  if(!allFinished) return;
+  const { data: teamRow } = await supabaseClient.from('teams').select('*').eq('team_name', state.team.team_name).maybeSingle();
+  if(teamRow && teamRow.completion_bonus_date !== dateStr){
+    await supabaseClient.from('teams').update({
+      total_score: teamRow.total_score + TEAM_COMPLETION_BONUS,
+      completion_bonus_date: dateStr
+    }).eq('team_name', state.team.team_name);
+  }
 }
 
 function miniStandingsRows(teams){
@@ -1209,41 +1454,83 @@ async function renderStandings(){
   if(standingsTab === 'teams'){
     const { data: teams } = await supabaseClient.from('teams').select('*').order('total_score', { ascending:false });
     const medals = ['🥇','🥈','🥉'];
+    const list = teams || [];
     app.innerHTML = `
       ${topbar()}
       <div class="card">
         <span class="eyebrow">League Table</span>
         <h2>Standings</h2>
         ${standingsTabs()}
-        ${(teams && teams.length) ? `
+        ${list.length ? `
           <table class="standings">
             <tr><th>#</th><th>Team</th><th>Streak</th><th style="text-align:right;">Points</th></tr>
-            ${teams.map((t,i) => `
+            ${list.map((t,i) => {
+              const gap = i>0 ? (list[i-1].total_score - t.total_score) : 0;
+              return `
               <tr>
                 <td>${medals[i] ? `<span class="rank-medal">${medals[i]}</span>` : (i+1)}</td>
-                <td><span class="team-swatch" style="background:${t.color}"></span>${escapeHtml(t.team_name)}</td>
+                <td>
+                  <span class="team-swatch" style="background:${t.color}"></span>${escapeHtml(t.team_name)}
+                  ${i>0 ? `<div class="muted" style="font-size:0.7rem;">${gap} pts behind #${i}</div>` : ''}
+                </td>
                 <td>${t.streak_days > 0 ? `<span class="streak-badge">🔥 ${t.streak_days}d</span>` : '<span class="muted">—</span>'}</td>
                 <td style="text-align:right; font-weight:700;">${t.total_score}</td>
               </tr>
-            `).join('')}
+            `;}).join('')}
           </table>
+          <button class="btn btn-ghost" style="margin-top:14px;" onclick="showCertificate('${escapeHtml(list[0].team_name).replace(/'/g,"\\'")}')">🏆 Generate Champion Certificate</button>
+          <div id="certArea"></div>
         ` : '<p class="muted">No teams yet.</p>'}
       </div>
     `;
     return;
   }
 
-  // Student leaderboard: aggregate points per student from team_progress
+  if(standingsTab === 'duels'){
+    const [{ data: teams }, { data: students }] = await Promise.all([
+      supabaseClient.from('teams').select('*').order('duel_wins', { ascending:false }),
+      supabaseClient.from('student_codes').select('*').order('duel_wins', { ascending:false })
+    ]);
+    const teamList = (teams||[]).filter(t=>t.duel_wins>0);
+    const studentList = (students||[]).filter(s=>s.duel_wins>0);
+    const medals = ['🥇','🥈','🥉'];
+    app.innerHTML = `
+      ${topbar()}
+      <div class="card">
+        <span class="eyebrow">Challenge Wins</span>
+        <h2>⚔️ Duel Leaderboard</h2>
+        ${standingsTabs()}
+        <h3>Teams</h3>
+        ${teamList.length ? `
+          <table class="standings">
+            <tr><th>#</th><th>Team</th><th style="text-align:right;">Wins</th></tr>
+            ${teamList.map((t,i)=>`<tr><td>${medals[i]||(i+1)}</td><td><span class="team-swatch" style="background:${t.color}"></span>${escapeHtml(t.team_name)}</td><td style="text-align:right; font-weight:700;">${t.duel_wins}</td></tr>`).join('')}
+          </table>
+        ` : '<p class="muted">No team duel wins yet.</p>'}
+        <div class="divider"></div>
+        <h3>Players</h3>
+        ${studentList.length ? `
+          <table class="standings">
+            <tr><th>#</th><th>Student</th><th style="text-align:right;">Wins</th></tr>
+            ${studentList.map((s,i)=>`<tr><td>${medals[i]||(i+1)}</td><td>${escapeHtml(s.student_name)}</td><td style="text-align:right; font-weight:700;">${s.duel_wins}</td></tr>`).join('')}
+          </table>
+        ` : '<p class="muted">No player duel wins yet.</p>'}
+      </div>
+    `;
+    return;
+  }
+
+  // Student leaderboard: aggregate real points earned from team_progress
   const [{ data: progress }, { data: students }] = await Promise.all([
     supabaseClient.from('team_progress').select('*'),
     supabaseClient.from('student_codes').select('*')
   ]);
   const pointsByCode = {};
   (progress || []).forEach(p => {
-    if(p.correct) pointsByCode[p.code] = (pointsByCode[p.code] || 0) + 15;
+    pointsByCode[p.code] = (pointsByCode[p.code] || 0) + (p.points || 0);
   });
   const ranked = (students || [])
-    .map(s => ({ name: s.student_name, team: s.team_name, points: pointsByCode[s.code] || 0 }))
+    .map(s => ({ name: s.student_name, team: s.team_name, points: pointsByCode[s.code] || 0, xp: s.xp_points || 0 }))
     .sort((a,b) => b.points - a.points);
   const medals = ['🥇','🥈','🥉'];
 
@@ -1255,11 +1542,12 @@ async function renderStandings(){
       ${standingsTabs()}
       ${ranked.length ? `
         <table class="standings">
-          <tr><th>#</th><th>Student</th><th>Team</th><th style="text-align:right;">Points</th></tr>
+          <tr><th>#</th><th>Student</th><th>Level</th><th>Team</th><th style="text-align:right;">Points</th></tr>
           ${ranked.map((s,i) => `
             <tr>
               <td>${medals[i] ? `<span class="rank-medal">${medals[i]}</span>` : (i+1)}</td>
               <td>${escapeHtml(s.name)}</td>
+              <td>${levelBadgeHtml(s.xp)}</td>
               <td class="muted">${s.team ? escapeHtml(s.team) : '—'}</td>
               <td style="text-align:right; font-weight:700;">${s.points}</td>
             </tr>
@@ -1270,46 +1558,478 @@ async function renderStandings(){
   `;
 }
 
+async function showCertificate(teamName){
+  const { data: team } = await supabaseClient.from('teams').select('*').eq('team_name', teamName).maybeSingle();
+  if(!team) return;
+  const certArea = document.getElementById('certArea');
+  certArea.innerHTML = `
+    <div class="certificate" style="margin-top:14px;">
+      <div class="cert-title">The Academy English League</div>
+      <div class="cert-medal">🏆</div>
+      <div class="cert-team">${escapeHtml(team.team_name)}</div>
+      <p class="muted">Champions with ${team.total_score} points</p>
+      <p class="muted" style="font-size:0.75rem;">${new Date().toLocaleDateString()}</p>
+    </div>
+    <button class="btn btn-ghost" style="margin-top:10px;" onclick="window.print()">🖨 Print / Share Certificate</button>
+  `;
+}
+
 function standingsTabs(){
   return `
     <div class="btn-row" style="margin-bottom:14px;">
       <button class="btn ${standingsTab==='teams' ? 'btn-primary' : 'btn-ghost'}" onclick="switchStandingsTab('teams')">🏆 Teams</button>
       <button class="btn ${standingsTab==='students' ? 'btn-primary' : 'btn-ghost'}" onclick="switchStandingsTab('students')">👤 Students</button>
+      <button class="btn ${standingsTab==='duels' ? 'btn-primary' : 'btn-ghost'}" onclick="switchStandingsTab('duels')">⚔️ Duels</button>
     </div>
   `;
 }
 function switchStandingsTab(tab){ standingsTab = tab; renderStandings(); }
 
 /* ============================================================
-   BOOT — restore where the user left off on refresh
+   DUELS — head-to-head challenges (team vs team, or player vs player)
    ============================================================ */
-async function boot(){
-  const saved = loadPersistedState();
-  if(saved){
-    state.history = saved.history || [];
-    state.teacherAuthed = !!saved.teacherAuthed;
-    state.studentCode = saved.studentCode || null;
+function renderDuelCodeEntry(){
+  app.innerHTML = `
+    ${topbar()}
+    <div class="card">
+      <span class="eyebrow">Challenges</span>
+      <h2>Enter your student code</h2>
+      <input type="text" id="duelCodeInput" placeholder="e.g. K7P2XQ" maxlength="6" style="text-transform:uppercase; letter-spacing:2px; font-weight:700; text-align:center; font-size:1.2rem;">
+      <div id="duelCodeError"></div>
+      <button class="btn btn-primary" onclick="submitDuelCode()">Continue</button>
+    </div>
+  `;
+  const input = document.getElementById('duelCodeInput');
+  input.focus();
+  input.addEventListener('input', () => { input.value = input.value.toUpperCase(); });
+  input.addEventListener('keydown', e => { if(e.key==='Enter') submitDuelCode(); });
+}
+async function submitDuelCode(){
+  const code = document.getElementById('duelCodeInput').value.trim().toUpperCase();
+  const errEl = document.getElementById('duelCodeError');
+  if(!code) return;
+  const { data: codeRow } = await supabaseClient.from('student_codes').select('*').eq('code', code).maybeSingle();
+  if(!codeRow){ errEl.innerHTML = `<div class="feedback bad">That code isn't recognized.</div>`; return; }
+  state.studentCode = code;
+  state.studentName = codeRow.student_name;
+  state.studentXP = codeRow.xp_points || 0;
+  navigateTo('duelList');
+}
 
-    if(saved.screen === 'teacherDashboard' && !state.teacherAuthed){
-      state.screen = 'roleSelect'; state.history = [];
-    } else if(saved.screen === 'studentChallenge' && state.studentCode){
-      try{
-        const { data: codeRow } = await supabaseClient.from('student_codes').select('*').eq('code', state.studentCode).maybeSingle();
-        if(codeRow){
-          const { data: team } = await supabaseClient.from('teams').select('*').eq('team_name', codeRow.team_name).maybeSingle();
-          if(team){ state.team = team; state.studentName = codeRow.student_name; state.screen = 'studentChallenge'; }
-          else { state.screen = 'roleSelect'; state.history = []; }
-        } else { state.screen = 'roleSelect'; state.history = []; }
-      }catch(e){ state.screen = 'roleSelect'; state.history = []; }
-    } else if(['studentCodeEntry','standings','teacherLogin','teacherDashboard'].includes(saved.screen)){
-      state.screen = saved.screen;
-    } else {
-      state.screen = 'roleSelect'; state.history = [];
+async function renderDuelList(){
+  if(!state.studentCode){ navigateTo('duelCodeEntry'); return; }
+  app.innerHTML = `${topbar()}<div class="card"><p class="muted center-note">Loading your challenges…</p></div>`;
+  const { data: myEntries } = await supabaseClient.from('duel_participants').select('*').eq('participant_code', state.studentCode);
+  const duelIds = (myEntries || []).map(e => e.duel_id);
+  let duels = [];
+  for(const id of duelIds){
+    const { data: d } = await supabaseClient.from('duels').select('*').eq('id', id).maybeSingle();
+    if(d) duels.push(d);
+  }
+  duels = duels.filter(d => d.status === 'active');
+
+  app.innerHTML = `
+    ${topbar()}
+    <div class="card">
+      <span class="eyebrow">${escapeHtml(state.studentName || '')}</span>
+      <h2>⚔️ My Challenges</h2>
+      ${duels.length ? '' : '<p class="muted">No active challenges right now. Ask your teacher to set one up!</p>'}
+      <div id="duelListArea"></div>
+    </div>
+  `;
+  const area = document.getElementById('duelListArea');
+  duels.forEach(d => {
+    const row = document.createElement('div');
+    row.className = 'team-row';
+    row.innerHTML = `
+      <div><div class="team-name">${escapeHtml(d.name)}</div><div class="team-meta">${d.type === 'team' ? 'Team vs Team' : 'Player vs Player'}</div></div>
+      <span style="color:var(--muted);">›</span>
+    `;
+    row.onclick = () => { state.currentDuelId = d.id; navigateTo('duelPlay'); };
+    area.appendChild(row);
+  });
+}
+
+async function renderDuelPlay(){
+  const duelId = state.currentDuelId;
+  if(!duelId || !state.studentCode){ navigateTo('duelList'); return; }
+  app.innerHTML = `${topbar()}<div class="card"><p class="muted center-note">Loading challenge…</p></div>`;
+
+  const [{ data: duel }, { data: participants }, { data: myProgress }, { data: myDisables }] = await Promise.all([
+    supabaseClient.from('duels').select('*').eq('id', duelId).maybeSingle(),
+    supabaseClient.from('duel_participants').select('*').eq('duel_id', duelId),
+    supabaseClient.from('duel_progress').select('*').eq('duel_id', duelId).eq('participant_code', state.studentCode),
+    supabaseClient.from('duel_disables').select('*').eq('duel_id', duelId).eq('target_code', state.studentCode)
+  ]);
+  if(!duel){ navigateTo('duelList'); return; }
+
+  const me = (participants||[]).find(p => p.participant_code === state.studentCode);
+  const mySide = me ? me.side : 'a';
+  const myIndex = (myProgress||[]).length;
+  const keys = duel.question_keys.split(',');
+
+  // Check active kick/disable
+  const activeDisable = (myDisables||[]).find(d => d.disabled_until_index > myIndex);
+  const header = `
+    ${topbar()}
+    <div class="card">
+      <span class="eyebrow">⚔️ ${escapeHtml(duel.name)}</span>
+      <h2>${escapeHtml(state.studentName)} — Side ${mySide.toUpperCase()}</h2>
+  `;
+
+  if(duel.status === 'ended'){
+    app.innerHTML = header + duelResultHtml(duel, participants) + `</div>`;
+    return;
+  }
+
+  if(activeDisable){
+    const remaining = activeDisable.disabled_until_index - myIndex;
+    app.innerHTML = header + `
+      <div class="feedback bad">🚫 You were kicked! Wait ${remaining} more question${remaining!==1?'s':''} before you can play again.</div>
+      <button class="btn btn-ghost" style="margin-top:10px;" onclick="renderDuelPlay()">Check Again</button>
+    </div>`;
+    return;
+  }
+
+  if(myIndex >= keys.length){
+    app.innerHTML = header + `
+      <div class="feedback ok">✓ You've answered all ${keys.length} questions! Waiting for the challenge to end.</div>
+      ${duelScoreboardHtml(participants, await duelScores(duelId))}
+    </div>`;
+    return;
+  }
+
+  const streak = computeDuelTrailingStreak(myProgress || []);
+  const picked = questionByKey(keys[myIndex]);
+  renderDuelQuestion(duel, participants, mySide, myIndex, streak, picked, header);
+}
+
+function computeDuelTrailingStreak(rows){
+  const sorted = [...rows].sort((a,b) => a.question_index - b.question_index);
+  let streak = 0;
+  for(let i = sorted.length - 1; i >= 0; i--){
+    if(sorted[i].correct) streak++; else break;
+  }
+  return streak;
+}
+
+async function duelScores(duelId){
+  const { data: progress } = await supabaseClient.from('duel_progress').select('*').eq('duel_id', duelId);
+  const { data: participants } = await supabaseClient.from('duel_participants').select('*').eq('duel_id', duelId);
+  const scoreByCode = {};
+  (progress||[]).forEach(p => { if(p.correct) scoreByCode[p.participant_code] = (scoreByCode[p.participant_code]||0) + 1; });
+  let sideA = 0, sideB = 0;
+  (participants||[]).forEach(p => {
+    const s = scoreByCode[p.participant_code] || 0;
+    if(p.side === 'a') sideA += s; else sideB += s;
+  });
+  return { sideA, sideB, scoreByCode };
+}
+
+function duelScoreboardHtml(participants, scores){
+  const sideAList = participants.filter(p=>p.side==='a');
+  const sideBList = participants.filter(p=>p.side==='b');
+  return `
+    <div class="divider"></div>
+    <div style="display:flex; justify-content:space-between; font-family:var(--font-head); font-weight:800; font-size:1.3rem; margin-bottom:10px;">
+      <span>${scores.sideA}</span><span class="muted" style="font-size:0.9rem;">VS</span><span>${scores.sideB}</span>
+    </div>
+    <div style="display:flex; justify-content:space-between; gap:10px;">
+      <div style="flex:1;">${sideAList.map(p=>`<div class="muted" style="font-size:0.8rem;">${escapeHtml(p.participant_code)}: ${scores.scoreByCode[p.participant_code]||0}</div>`).join('')}</div>
+      <div style="flex:1; text-align:right;">${sideBList.map(p=>`<div class="muted" style="font-size:0.8rem;">${escapeHtml(p.participant_code)}: ${scores.scoreByCode[p.participant_code]||0}</div>`).join('')}</div>
+    </div>
+  `;
+}
+
+function duelResultHtml(duel, participants){
+  const won = duel.winner_side ? (duel.winner_side === 'draw' ? null : true) : null;
+  return `
+    <div class="feedback ${duel.winner_side==='draw'?'bad':'ok'}">
+      ${duel.winner_side === 'draw' ? "🤝 It's a draw!" : `🏆 Side ${(duel.winner_side||'').toUpperCase()} won this challenge!`}
+    </div>
+  `;
+}
+
+function renderDuelQuestion(duel, participants, mySide, myIndex, streak, picked, header){
+  const q = picked.data;
+  const canKick = streak > 0 && streak % DUEL_KICK_STREAK === 0;
+  const bodyEnd = `
+      <p class="muted" style="font-size:0.8rem;">Question ${myIndex+1}/${duel.question_keys.split(',').length} · 🔥 ${streak} in a row</p>
+      <div id="gameArea"></div>
+      ${canKick ? `<button class="btn btn-accent" id="kickBtn" style="margin-top:10px;">🎯 Kick an Opponent!</button>` : ''}
+    </div>
+  `;
+
+  function afterAnswer(){
+    if(canKick){
+      const btn = document.getElementById('kickBtn');
+      if(btn) btn.onclick = () => showKickPicker(duel.id, mySide, participants);
     }
   }
-  render();
+
+  if(picked.type === 'mcq'){
+    app.innerHTML = header + `<span class="eyebrow">Multiple Choice</span><h3>${q.q}</h3>` + bodyEnd;
+    const area = document.getElementById('gameArea');
+    q.opts.forEach((opt, idx) => {
+      const b = document.createElement('button'); b.className='mc-option'; b.textContent=opt;
+      b.onclick = () => submitDuelAnswer(duel, mySide, myIndex, picked, idx===q.correct, () => {
+        document.querySelectorAll('.mc-option').forEach((el,i)=>{el.disabled=true; if(i===q.correct) el.classList.add('correct'); else if(i===idx) el.classList.add('wrong');});
+      }, afterAnswer);
+      area.appendChild(b);
+    });
+  } else if(picked.type === 'fill'){
+    app.innerHTML = header + `<span class="eyebrow">Fill in the Blank</span><h3>${q.prompt}</h3><input type="text" id="duelFillInput" placeholder="Type your answer">` + bodyEnd + `<button class="btn btn-primary" id="duelSubmitBtn" style="margin-top:8px;">Submit</button>`;
+    document.getElementById('duelFillInput').focus();
+    document.getElementById('duelSubmitBtn').onclick = () => {
+      const val = document.getElementById('duelFillInput').value.trim().toLowerCase();
+      const correct = q.answers.some(a=>a.toLowerCase()===val);
+      document.getElementById('duelFillInput').disabled = true; document.getElementById('duelSubmitBtn').disabled = true;
+      submitDuelAnswer(duel, mySide, myIndex, picked, correct, () => {
+        document.getElementById('gameArea').innerHTML = `<div class="feedback ${correct?'ok':'bad'}">${correct?'✓ Correct!':'✗ Answer: '+escapeHtml(q.answers[0])}</div>`;
+      }, afterAnswer);
+    };
+  } else if(picked.type === 'scramble'){
+    const scrambled = shuffleLetters(q.word);
+    app.innerHTML = header + `<span class="eyebrow">Word Scramble</span><p class="muted">Hint: ${escapeHtml(q.hint)}</p><div class="scramble-word">${scrambled}</div><input type="text" id="duelScrambleInput" placeholder="Unscramble">` + bodyEnd + `<button class="btn btn-primary" id="duelSubmitBtn" style="margin-top:8px;">Submit</button>`;
+    document.getElementById('duelScrambleInput').focus();
+    document.getElementById('duelSubmitBtn').onclick = () => {
+      const val = document.getElementById('duelScrambleInput').value.trim().toLowerCase();
+      const correct = val === q.word.toLowerCase();
+      document.getElementById('duelScrambleInput').disabled = true; document.getElementById('duelSubmitBtn').disabled = true;
+      submitDuelAnswer(duel, mySide, myIndex, picked, correct, () => {
+        document.getElementById('gameArea').innerHTML = `<div class="feedback ${correct?'ok':'bad'}">${correct?'✓ Correct!':'✗ Word was: '+escapeHtml(q.word)}</div>`;
+      }, afterAnswer);
+    };
+  } else if(picked.type === 'oddOneOut'){
+    app.innerHTML = header + `<span class="eyebrow">Odd One Out</span><h3>Which word doesn't belong?</h3><p class="muted">${escapeHtml(q.category)}</p>` + bodyEnd;
+    const area = document.getElementById('gameArea');
+    q.words.forEach((word, idx) => {
+      const b = document.createElement('button'); b.className='mc-option'; b.textContent=word;
+      b.onclick = () => submitDuelAnswer(duel, mySide, myIndex, picked, idx===q.oddIndex, () => {
+        document.querySelectorAll('.mc-option').forEach((el,i)=>{el.disabled=true; if(i===q.oddIndex) el.classList.add('correct'); else if(i===idx) el.classList.add('wrong');});
+      }, afterAnswer);
+      area.appendChild(b);
+    });
+  } else if(picked.type === 'truefalse'){
+    app.innerHTML = header + `<span class="eyebrow">True or False</span><h3>${escapeHtml(q.statement)}</h3>` + bodyEnd;
+    const area = document.getElementById('gameArea');
+    [['True',true],['False',false]].forEach(([label,val]) => {
+      const b = document.createElement('button'); b.className='mc-option'; b.textContent=label;
+      b.onclick = () => submitDuelAnswer(duel, mySide, myIndex, picked, val===q.answer, () => {
+        document.querySelectorAll('.mc-option').forEach((el,i)=>{ el.disabled=true; const isC=(i===0&&q.answer===true)||(i===1&&q.answer===false); if(isC) el.classList.add('correct'); else if(el.textContent===label) el.classList.add('wrong'); });
+      }, afterAnswer);
+      area.appendChild(b);
+    });
+  }
 }
-boot();
-</script>
-</body>
-</html>
+
+async function submitDuelAnswer(duel, mySide, myIndex, picked, correct, uiFn, afterFn){
+  uiFn();
+  const fb = document.createElement('div');
+  fb.className = 'feedback ' + (correct?'ok':'bad');
+  fb.textContent = correct ? '✓ Point scored!' : '✗ No point this round.';
+  document.getElementById('gameArea').appendChild(fb);
+  try{
+    await supabaseClient.from('duel_progress').insert({ duel_id: duel.id, participant_code: state.studentCode, question_index: myIndex, correct });
+  }catch(e){ console.error(e); }
+  afterFn();
+  const nextBtn = document.createElement('button');
+  nextBtn.className = 'btn btn-primary'; nextBtn.style.marginTop = '10px'; nextBtn.textContent = 'Continue →';
+  nextBtn.onclick = () => renderDuelPlay();
+  document.getElementById('gameArea').appendChild(nextBtn);
+}
+
+async function showKickPicker(duelId, mySide, participants){
+  const opponents = participants.filter(p => p.side !== mySide);
+  const overlay = document.getElementById('freezeOverlay') || (() => {
+    const d = document.createElement('div'); d.id='freezeOverlay'; document.body.appendChild(d); return d;
+  })();
+  overlay.innerHTML = `
+    <div class="freeze-modal">
+      <p class="muted">🎯 Pick 1 opponent to kick for 6 questions, or 2 opponents for 3 questions each:</p>
+      <div id="kickChoices"></div>
+      <button class="btn btn-primary" id="confirmKickBtn" disabled>Confirm Kick</button>
+      <button class="btn btn-ghost" style="margin-top:8px;" onclick="document.getElementById('freezeOverlay').innerHTML=''">Cancel</button>
+    </div>
+  `;
+  const choicesDiv = document.getElementById('kickChoices');
+  const selected = new Set();
+  opponents.forEach(o => {
+    const b = document.createElement('button');
+    b.className = 'mc-option';
+    b.textContent = o.participant_code + (o.team_name ? ' ('+o.team_name+')' : '');
+    b.onclick = () => {
+      if(selected.has(o.participant_code)){ selected.delete(o.participant_code); b.classList.remove('correct'); }
+      else if(selected.size < 2){ selected.add(o.participant_code); b.classList.add('correct'); }
+      document.getElementById('confirmKickBtn').disabled = selected.size === 0;
+    };
+    choicesDiv.appendChild(b);
+  });
+  document.getElementById('confirmKickBtn').onclick = async () => {
+    const targets = [...selected];
+    const questionsEach = targets.length === 1 ? 6 : 3;
+    for(const targetCode of targets){
+      const { data: targetProgress } = await supabaseClient.from('duel_progress').select('*').eq('duel_id', duelId).eq('participant_code', targetCode);
+      const targetIndex = (targetProgress||[]).length;
+      await supabaseClient.from('duel_disables').insert({ duel_id: duelId, target_code: targetCode, disabled_until_index: targetIndex + questionsEach });
+    }
+    overlay.innerHTML = `<div class="freeze-modal"><div class="feedback ok">🎯 Kicked ${targets.length} player(s)!</div></div>`;
+    setTimeout(() => { overlay.innerHTML = ''; }, 1500);
+  };
+}
+
+/* ---------------- Teacher: create & manage duels ---------------- */
+async function renderTeacherDuels(){
+  if(!state.teacherAuthed){ navigateTo('teacherLogin'); return; }
+  app.innerHTML = `${topbar()}<div class="card"><p class="muted center-note">Loading challenges…</p></div>`;
+  const [{ data: teams }, { data: students }, { data: duels }] = await Promise.all([
+    supabaseClient.from('teams').select('*').order('team_name', { ascending:true }),
+    supabaseClient.from('student_codes').select('*').order('student_name', { ascending:true }),
+    supabaseClient.from('duels').select('*').order('created_at', { ascending:false })
+  ]);
+  const teamList = teams || [];
+  const studentList = (students || []).filter(s => s.team_name);
+  const duelList = duels || [];
+
+  app.innerHTML = `
+    ${topbar()}
+    <div class="card">
+      <span class="eyebrow">Challenges</span>
+      <h2>Create a Head-to-Head Duel</h2>
+      <input type="text" id="duelName" placeholder="Challenge name (e.g. Falcons vs Tigers)" maxlength="40">
+      <p class="muted" style="margin-bottom:8px;">Type</p>
+      <select id="duelType" onchange="renderDuelSidePickers()">
+        <option value="team">Team(s) vs Team(s)</option>
+        <option value="player">Player(s) vs Player(s)</option>
+      </select>
+      <div id="duelSidePickers"></div>
+      <button class="btn btn-primary" onclick="createDuel()">⚔️ Start Challenge</button>
+      <div id="duelCreateResult"></div>
+    </div>
+
+    <div class="card">
+      <span class="eyebrow">Active &amp; Past Challenges (${duelList.length})</span>
+      <h2>Challenges</h2>
+      <div id="duelsManageList">
+        ${duelList.length ? '' : '<p class="muted">No challenges yet.</p>'}
+      </div>
+    </div>
+  `;
+  window.__teamListForDuels = teamList;
+  window.__studentListForDuels = studentList;
+  renderDuelSidePickers();
+
+  const listEl = document.getElementById('duelsManageList');
+  for(const d of duelList){
+    const scores = await duelScores(d.id);
+    const row = document.createElement('div');
+    row.className = 'team-row';
+    row.style.cssText = 'flex-direction:column; align-items:stretch;';
+    row.innerHTML = `
+      <div style="display:flex; justify-content:space-between; align-items:center;">
+        <div>
+          <div class="team-name">${escapeHtml(d.name)}</div>
+          <div class="team-meta">${d.type==='team'?'Team vs Team':'Player vs Player'} · <span class="status-pill ${d.status==='active'?'status-open':'status-closed'}">${d.status}</span></div>
+        </div>
+        <div style="font-family:var(--font-head); font-weight:800;">${scores.sideA} : ${scores.sideB}</div>
+      </div>
+      ${d.status==='active' ? `<button class="btn btn-danger" style="margin-top:8px;" data-duel-id="${d.id}">End Challenge</button>` : ''}
+    `;
+    if(d.status==='active'){
+      row.querySelector('button').onclick = () => endDuel(d.id, scores);
+    }
+    listEl.appendChild(row);
+  }
+}
+
+function renderDuelSidePickers(){
+  const type = document.getElementById('duelType').value;
+  const source = type === 'team' ? window.__teamListForDuels : window.__studentListForDuels;
+  const getLabel = type === 'team' ? (x => x.team_name) : (x => x.student_name + ' ('+x.team_name+')');
+  const getId = type === 'team' ? (x => x.team_name) : (x => x.code);
+  const pickerHtml = (side) => `
+    <p class="muted" style="margin-bottom:6px;">Side ${side.toUpperCase()}</p>
+    <div style="max-height:160px; overflow-y:auto; border:1px solid var(--line); border-radius:8px; padding:8px; margin-bottom:12px;">
+      ${(source||[]).map(x => `
+        <label style="display:block; padding:4px 0; font-size:0.9rem;">
+          <input type="checkbox" class="duel-side-${side}" value="${escapeHtml(getId(x))}"> ${escapeHtml(getLabel(x))}
+        </label>
+      `).join('') || '<span class="muted">Nothing available yet.</span>'}
+    </div>
+  `;
+  document.getElementById('duelSidePickers').innerHTML = pickerHtml('a') + pickerHtml('b');
+}
+
+async function createDuel(){
+  const name = document.getElementById('duelName').value.trim();
+  const type = document.getElementById('duelType').value;
+  const resultEl = document.getElementById('duelCreateResult');
+  const sideAIds = [...document.querySelectorAll('.duel-side-a:checked')].map(el => el.value);
+  const sideBIds = [...document.querySelectorAll('.duel-side-b:checked')].map(el => el.value);
+  if(!name || !sideAIds.length || !sideBIds.length){
+    resultEl.innerHTML = `<div class="feedback bad">Enter a name and pick at least one participant on each side.</div>`;
+    return;
+  }
+  resultEl.innerHTML = `<p class="muted">Creating…</p>`;
+  const questionKeys = pickDuelQuestions(DUEL_QUESTION_COUNT).join(',');
+  const { data: created, error } = await supabaseClient.from('duels').insert({ name, type, question_keys: questionKeys });
+  if(error || !created || !created[0]){
+    resultEl.innerHTML = `<div class="feedback bad">Could not create challenge: ${escapeHtml(error ? (error.message||String(error)) : 'unknown error')}</div>`;
+    return;
+  }
+  const duelId = created[0].id;
+
+  // Expand teams into individual student participants; players are already individuals.
+  async function expandSide(ids, side){
+    if(type === 'team'){
+      for(const teamName of ids){
+        const members = window.__studentListForDuels.filter(s => s.team_name === teamName);
+        for(const m of members){
+          await supabaseClient.from('duel_participants').insert({ duel_id: duelId, participant_code: m.code, side, team_name: teamName });
+        }
+      }
+    } else {
+      for(const code of ids){
+        const student = window.__studentListForDuels.find(s => s.code === code);
+        await supabaseClient.from('duel_participants').insert({ duel_id: duelId, participant_code: code, side, team_name: student ? student.team_name : null });
+      }
+    }
+  }
+  await expandSide(sideAIds, 'a');
+  await expandSide(sideBIds, 'b');
+
+  resultEl.innerHTML = `<div class="feedback ok">✓ Challenge "${escapeHtml(name)}" created!</div>`;
+  renderTeacherDuels();
+}
+
+async function endDuel(duelId, scores){
+  if(!confirm('End this challenge now? The side with more correct answers wins.')) return;
+  let winnerSide = 'draw';
+  if(scores.sideA > scores.sideB) winnerSide = 'a';
+  else if(scores.sideB > scores.sideA) winnerSide = 'b';
+
+  await supabaseClient.from('duels').update({ status:'ended', winner_side: winnerSide }).eq('id', duelId);
+
+  if(winnerSide !== 'draw'){
+    const { data: participants } = await supabaseClient.from('duel_participants').select('*').eq('duel_id', duelId);
+    const winners = (participants||[]).filter(p => p.side === winnerSide);
+    const wonTeams = new Set();
+    for(const w of winners){
+      const { data: codeRow } = await supabaseClient.from('student_codes').select('*').eq('code', w.participant_code).maybeSingle();
+      if(codeRow){
+        await supabaseClient.from('student_codes').update({ duel_wins: (codeRow.duel_wins||0) + 1 }).eq('code', w.participant_code);
+      }
+      if(w.team_name) wonTeams.add(w.team_name);
+    }
+    for(const tn of wonTeams){
+      const { data: teamRow } = await supabaseClient.from('teams').select('*').eq('team_name', tn).maybeSingle();
+      if(teamRow){
+        await supabaseClient.from('teams').update({ duel_wins: (teamRow.duel_wins||0) + 1 }).eq('team_name', tn);
+      }
+    }
+  }
+  renderTeacherDuels();
+}
+
+/* ============================================================
+   BOOT — restore wher
