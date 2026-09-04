@@ -814,8 +814,11 @@ const BADGE_INFO = {
   first_blood: { icon: '⚡', label: 'First Blood', desc: "First correct answer of the day" },
 };
 
-function levelBadgeHtml(xp){
+function levelBadgeHtml(xp, compact){
   const { level, title } = levelForXP(xp);
+  if(compact){
+    return `<span class="level-badge" style="white-space:nowrap;" title="${escapeHtml(title)}">Lv.${level}</span>`;
+  }
   return `<span class="level-badge">Lv.${level} ${escapeHtml(title)}</span>`;
 }
 
@@ -1964,6 +1967,11 @@ async function renderStudentChallenge(){
         <button class="btn btn-ghost" style="margin-top:10px;" onclick="showMyDailyAnswers('${dateStr}')">📋 View My Answers</button>
         <button class="btn btn-ghost" style="margin-top:8px;" onclick="goStandings()">View Standings</button>
       </div>
+      <div class="card">
+        <h3>🎮 Done for today — play while you wait?</h3>
+        <p class="muted" style="margin-top:-4px;">Just for fun — no points, no pressure. A quick word game to pass the time.</p>
+        <button class="btn btn-primary" style="margin-top:8px;" onclick="renderWordBlitz()">🔤 Play Word Blitz</button>
+      </div>
     `;
     return;
   }
@@ -1983,6 +1991,80 @@ function computeTrailingStreak(rows){
     if(sorted[i].correct) streak++; else break;
   }
   return streak;
+}
+
+/* ============================================================
+   WORD BLITZ — a light, just-for-fun word game with no scoring
+   impact, offered once a student finishes today's 30 questions
+   so they have something to do instead of getting bored.
+   ============================================================ */
+function scrambleWord(word){
+  let letters;
+  let tries = 0;
+  do {
+    letters = word.split('').sort(() => Math.random() - 0.5);
+    tries++;
+  } while(letters.join('') === word && word.length > 1 && tries < 10);
+  return letters.join('');
+}
+function nextWordBlitzWord(){
+  const pool = SCRAMBLE_BANK.concat(SCRAMBLE_BANK_B2);
+  const pick = pool[Math.floor(Math.random() * pool.length)];
+  state.wordBlitz.word = pick.word;
+  state.wordBlitz.hint = pick.hint;
+  state.wordBlitz.scrambled = scrambleWord(pick.word);
+}
+function renderWordBlitz(){
+  if(!state.wordBlitz) state.wordBlitz = { score:0, streak:0, best:0 };
+  nextWordBlitzWord();
+  renderWordBlitzScreen();
+}
+function renderWordBlitzScreen(){
+  const wb = state.wordBlitz;
+  app.innerHTML = `
+    ${topbar()}
+    <div class="card">
+      <span class="eyebrow">Just for Fun</span>
+      <h2>🔤 Word Blitz</h2>
+      <div style="display:flex; justify-content:space-between; font-size:0.85rem; color:var(--muted); margin-bottom:10px;">
+        <span>⭐ Score: ${wb.score}</span>
+        <span>🔥 Streak: ${wb.streak} (best ${wb.best})</span>
+      </div>
+      <div class="scramble-word">${escapeHtml(wb.scrambled.toUpperCase())}</div>
+      <p class="muted" style="text-align:center; margin-top:-6px;">Hint: ${escapeHtml(wb.hint)}</p>
+      <input type="text" id="wbInput" placeholder="Unscramble the word…" autocomplete="off" style="text-align:center; font-size:1.05rem;" onkeydown="if(event.key==='Enter'){ event.preventDefault(); submitWordBlitz(); }">
+      <div id="wbFeedback"></div>
+      <div class="btn-row" style="margin-top:8px;">
+        <button class="btn btn-primary" onclick="submitWordBlitz()">Check</button>
+        <button class="btn btn-ghost" onclick="skipWordBlitz()">Skip ⏭</button>
+      </div>
+      <button class="btn btn-ghost" style="margin-top:14px;" onclick="navigateTo('studentChallenge')">← Back</button>
+    </div>
+  `;
+  const input = document.getElementById('wbInput');
+  if(input) input.focus();
+}
+function submitWordBlitz(){
+  const wb = state.wordBlitz;
+  const input = document.getElementById('wbInput');
+  const fb = document.getElementById('wbFeedback');
+  const val = (input && input.value || '').trim().toLowerCase();
+  if(!val) return;
+  if(val === wb.word.toLowerCase()){
+    wb.score += 10;
+    wb.streak += 1;
+    wb.best = Math.max(wb.best, wb.streak);
+    if(fb) fb.innerHTML = `<div class="feedback ok">✓ Correct — "${escapeHtml(wb.word)}"!</div>`;
+    setTimeout(() => { nextWordBlitzWord(); renderWordBlitzScreen(); }, 650);
+  } else {
+    wb.streak = 0;
+    if(fb) fb.innerHTML = `<div class="feedback bad">✗ Not quite — try again!</div>`;
+  }
+}
+function skipWordBlitz(){
+  state.wordBlitz.streak = 0;
+  nextWordBlitzWord();
+  renderWordBlitzScreen();
 }
 
 function statsBar(stats, useHard, isBonus){
@@ -2461,12 +2543,12 @@ async function renderStandings(){
       ${podiumHtml(podiumEntries)}
       ${restRanked.length ? `
         <table class="standings">
-          <tr><th>#</th><th>Student</th><th>Level</th><th>Team</th><th style="text-align:right;">Points</th></tr>
+          <tr><th style="width:26px;">#</th><th>Student</th><th style="width:56px;">Level</th><th>Team</th><th style="text-align:right; width:58px;">Points</th></tr>
           ${restRanked.map((s,idx) => `
             <tr>
               <td>${idx+4}</td>
               <td>${escapeHtml(s.name)}</td>
-              <td>${levelBadgeHtml(s.xp)}</td>
+              <td>${levelBadgeHtml(s.xp, true)}</td>
               <td class="muted">${s.team ? escapeHtml(s.team) : '—'}</td>
               <td style="text-align:right; font-weight:700;">${s.points}</td>
             </tr>
