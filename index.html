@@ -1277,26 +1277,15 @@ function navigateTo(screen){
   if(state.screen && state.screen !== screen) state.history.push(state.screen);
   state.screen = screen;
   persistState();
-  try{ history.pushState({ appNav:true }, '', location.href); }catch(e){}
   render();
 }
 function goBack(){
-  // Route every back action (in-app button or the phone/browser back button)
-  // through the same real history.back() call, handled once in popstate below,
-  // so both stay in sync and always land on the true previous in-app screen.
-  try{
-    if(window.history.state && window.history.state.appNav){ history.back(); return; }
-  }catch(e){}
-  applyGoBack();
-}
-function applyGoBack(){
   clearChatPoll();
   const prev = state.history.pop();
   state.screen = prev || 'roleSelect';
   persistState();
   render();
 }
-window.addEventListener('popstate', function(){ applyGoBack(); });
 
 function render(){
   if(!supabaseReady && state.screen !== 'roleSelect'){
@@ -3686,7 +3675,6 @@ async function boot(){
       state.screen = 'roleSelect';
     }
   }
-  try{ history.replaceState({ appNav:true }, '', location.href); }catch(e){}
   render();
 }
 boot();
