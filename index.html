@@ -355,6 +355,16 @@
     outline:none; border-color: var(--accent); background:#fff;
     box-shadow: 0 0 0 3px var(--accent-dim);
   }
+  .fun-textarea{
+    width:100%; box-sizing:border-box; resize:none;
+    padding: 11px 16px; border-radius: 16px; border: 1.5px solid var(--line);
+    background: var(--paper); font-family: var(--font-body); font-size: 0.94rem;
+    line-height:1.4; transition: border-color .15s ease, box-shadow .15s ease, background .15s ease;
+  }
+  .fun-textarea:focus{
+    outline:none; border-color: var(--accent); background:#fff;
+    box-shadow: 0 0 0 3px var(--accent-dim);
+  }
   .chat-input-row textarea::placeholder{ color: var(--muted); }
   .chat-send-btn{
     flex-shrink:0; width:44px; height:44px; border-radius:50%; border:none;
@@ -1501,6 +1511,10 @@ function renderStudentHub(){
       <div class="icon">📅</div>
       <div><h3>Today's Challenge</h3><p class="muted" style="margin:0;">30 daily questions, adaptive difficulty.</p></div>
     </div>
+    <div class="card role-card" onclick="renderFunZone()">
+      <div class="icon">🎉</div>
+      <div><h3>Fun Zone</h3><p class="muted" style="margin:0;">Word games — just for fun, anytime.</p></div>
+    </div>
     <div class="card role-card" onclick="goDuels()">
       <div class="icon">⚔️</div>
       <div><h3>Challenges</h3><p class="muted" style="margin:0;">Head-to-head duels between teams or players.</p></div>
@@ -1981,11 +1995,7 @@ async function renderStudentChallenge(){
         <div class="feedback ok">🎉 You finished today's ${DAILY_QUESTION_LIMIT} questions! ${correctCount}/${DAILY_QUESTION_LIMIT} correct.</div>
         <button class="btn btn-ghost" style="margin-top:10px;" onclick="showMyDailyAnswers('${dateStr}')">📋 View My Answers</button>
         <button class="btn btn-ghost" style="margin-top:8px;" onclick="goStandings()">View Standings</button>
-      </div>
-      <div class="card">
-        <h3>🎮 Done for today — play while you wait?</h3>
-        <p class="muted" style="margin-top:-4px;">Just for fun — no points, no pressure.</p>
-        <button class="btn btn-primary" style="margin-top:8px;" onclick="renderFunZone()">🎉 Open the Fun Zone</button>
+        <p class="muted" style="margin-top:10px; font-size:0.82rem;">🎉 Bored while you wait for tomorrow? Check out the <strong>Fun Zone</strong> from the main menu.</p>
       </div>
     `;
     return;
@@ -2068,7 +2078,7 @@ function submitWordBlitz(){
   if(val === wb.word.toLowerCase()){
     wb.score += 10;
     wb.streak += 1;
-    wb.best = Math.max(wb.best, wb.streak);
+    if(wb.streak > wb.best){ wb.best = wb.streak; updateFunZoneScore('word_blitz_best', wb.best); }
     if(fb) fb.innerHTML = `<div class="feedback ok">✓ Correct — "${escapeHtml(wb.word)}"!</div>`;
     setTimeout(() => { nextWordBlitzWord(); renderWordBlitzScreen(); }, 650);
   } else {
@@ -2092,35 +2102,90 @@ function renderFunZone(){
     <div class="card">
       <span class="eyebrow">Just for Fun</span>
       <h2>🎉 Fun Zone</h2>
-      <p class="muted">No points, no pressure — just something fun while you wait for tomorrow's challenge.</p>
+      <p class="muted">No points, no pressure — just some fun word games, anytime.</p>
       <div class="btn-row" style="flex-direction:column; align-items:stretch; gap:10px; margin-top:10px;">
         <button class="btn btn-primary" onclick="renderWordBlitz()">🔤 Word Blitz — unscramble the word</button>
-        <button class="btn btn-primary" onclick="renderEmojiRiddle()">🧩 Emoji Riddle — guess the word from emojis</button>
+        <button class="btn btn-primary" onclick="renderEmojiRiddle()">🧩 Emoji Riddle — guess the word from the sounds</button>
         <button class="btn btn-primary" onclick="renderSpeedTyping()">⏱️ Speed Typing — how fast can you type?</button>
         <button class="btn btn-primary" onclick="renderDailySpin()">🎁 Daily Spin — one free spin a day</button>
+        <button class="btn btn-ghost" onclick="renderFunZoneLeaderboard()">🏆 Fun Zone Leaderboard</button>
       </div>
-      <button class="btn btn-ghost" style="margin-top:14px;" onclick="navigateTo('studentChallenge')">← Back</button>
+      <button class="btn btn-ghost" style="margin-top:14px;" onclick="navigateTo('studentHub')">← Back</button>
     </div>
   `;
 }
 
+/* Best-effort sync of a fun-zone personal best to Supabase so a class-wide
+   leaderboard can be shown. Never blocks or breaks the game if it fails. */
+async function updateFunZoneScore(field, value){
+  if(!state.studentCode) return;
+  try{
+    const { data: existing } = await supabaseClient.from('funzone_scores').select('*').eq('code', state.studentCode).maybeSingle();
+    const row = existing || { code: state.studentCode };
+    row.student_name = state.studentName || row.student_name || '';
+    row[field] = Math.max(value, row[field] || 0);
+    await supabaseClient.from('funzone_scores').upsert(row, { onConflict: 'code' });
+  }catch(e){ console.error('funzone score sync failed', e); }
+}
+
+async function renderFunZoneLeaderboard(){
+  app.innerHTML = `${topbar()}<div class="card"><p class="muted center-note">Loading Fun Zone leaderboard…</p></div>`;
+  try{
+    const { data: rows } = await supabaseClient.from('funzone_scores').select('*');
+    const all = rows || [];
+    const topBy = (field) => [...all].filter(r => (r[field]||0) > 0).sort((a,b) => (b[field]||0) - (a[field]||0)).slice(0,5);
+    const section = (title, field, unit) => {
+      const list = topBy(field);
+      return `
+        <div class="card">
+          <h3>${title}</h3>
+          ${list.length ? list.map((r,i) => `
+            <div class="student-row">
+              <span>${i+1}. ${escapeHtml(r.student_name || '—')}</span>
+              <span style="font-weight:700;">${r[field]}${unit}</span>
+            </div>
+          `).join('') : '<p class="muted">No scores yet — be the first to play!</p>'}
+        </div>
+      `;
+    };
+    app.innerHTML = `
+      ${topbar()}
+      <div class="card">
+        <span class="eyebrow">Just for Fun</span>
+        <h2>🏆 Fun Zone Leaderboard</h2>
+        <p class="muted">Bragging rights only — these don't affect your real points.</p>
+      </div>
+      ${section('🔤 Word Blitz — best streak', 'word_blitz_best', '')}
+      ${section('🧩 Emoji Riddle — best streak', 'emoji_riddle_best', '')}
+      ${section('⏱️ Speed Typing — best WPM', 'speed_typing_best_wpm', ' WPM')}
+      <div class="card">
+        <button class="btn btn-ghost" onclick="renderFunZone()">← Back to Fun Zone</button>
+      </div>
+    `;
+  }catch(e){
+    app.innerHTML = `${topbar()}<div class="card"><p class="muted center-note">Couldn't load the leaderboard right now.</p><button class="btn btn-ghost" style="margin-top:10px;" onclick="renderFunZone()">← Back to Fun Zone</button></div>`;
+  }
+}
+
 /* ---------------- Emoji Riddle ---------------- */
+/* Rebus-style: the emojis sound out the word piece by piece (not a literal
+   picture of the word) — e.g. 🔥+📥+🚦 = "flame"+"in"+"go" = Flamingo. */
 const EMOJI_RIDDLE_BANK = [
-  { emojis: "🐝🏠", answer: "beehive", hint: "where bees live" },
-  { emojis: "🌧️🌈", answer: "rainbow", hint: "colorful arc after rain" },
-  { emojis: "🔥🚒", answer: "firefighter", hint: "puts out fires" },
-  { emojis: "☀️🌻", answer: "sunflower", hint: "a flower that follows the sun" },
-  { emojis: "🦷🩹", answer: "toothache", hint: "pain in your mouth" },
-  { emojis: "📖🐛", answer: "bookworm", hint: "someone who loves reading" },
-  { emojis: "🌙🚶", answer: "sleepwalk", hint: "walking while asleep" },
-  { emojis: "❄️👤", answer: "snowman", hint: "built in winter" },
-  { emojis: "🕷️🕸️", answer: "spiderweb", hint: "a spider's home" },
-  { emojis: "🦋🏡", answer: "butterfly", hint: "flies with colorful wings" },
-  { emojis: "🌊🏄", answer: "surfboard", hint: "used to ride waves" },
-  { emojis: "🍯🐻", answer: "honey", hint: "a bear's favorite sweet" },
-  { emojis: "⏰🐦", answer: "earlybird", hint: "someone who wakes up early" },
-  { emojis: "🌪️🏠", answer: "tornado", hint: "a spinning storm" },
-  { emojis: "👁️🍎", answer: "eyeball", hint: "part of the eye" },
+  { emojis: "🔥📥🚦", answer: "flamingo", hint: "flame + in + go" },
+  { emojis: "🐝🍃", answer: "believe", hint: "bee + leaf" },
+  { emojis: "👁️😱", answer: "icecream", hint: "eye + scream" },
+  { emojis: "🚗🐾", answer: "carpet", hint: "car + pet" },
+  { emojis: "🧑🚦", answer: "mango", hint: "man + go" },
+  { emojis: "🎵📖", answer: "notebook", hint: "note + book" },
+  { emojis: "👂💍", answer: "earring", hint: "ear + ring" },
+  { emojis: "👁️🏝️", answer: "island", hint: "eye + land" },
+  { emojis: "🍳🎂", answer: "pancake", hint: "pan + cake" },
+  { emojis: "🏖️🧙‍♀️", answer: "sandwich", hint: "sand + witch" },
+  { emojis: "🔑🛹", answer: "keyboard", hint: "key + board" },
+  { emojis: "🐄👦", answer: "cowboy", hint: "cow + boy" },
+  { emojis: "🏠🔨", answer: "homework", hint: "home + work" },
+  { emojis: "🧈🪰", answer: "butterfly", hint: "butter + fly" },
+  { emojis: "☀️📅", answer: "sunday", hint: "sun + day" },
 ];
 function nextEmojiRiddle(){
   const pick = EMOJI_RIDDLE_BANK[Math.floor(Math.random() * EMOJI_RIDDLE_BANK.length)];
@@ -2145,7 +2210,8 @@ function renderEmojiRiddleScreen(){
         <span>🔥 Streak: ${er.streak} (best ${er.best})</span>
       </div>
       <div class="scramble-word" style="letter-spacing:0;">${er.emojis}</div>
-      <p class="muted" style="text-align:center; margin-top:-6px;">Hint: ${escapeHtml(er.hint)}</p>
+      <p class="muted" style="text-align:center; margin-top:-6px;">Sounds like: ${escapeHtml(er.hint)}</p>
+      <p class="muted" style="text-align:center; font-size:0.75rem; margin-top:-4px;">Say each emoji out loud, then blend the sounds together!</p>
       <input type="text" id="erInput" placeholder="What word is this?" autocomplete="off" style="text-align:center; font-size:1.05rem;" onkeydown="if(event.key==='Enter'){ event.preventDefault(); submitEmojiRiddle(); }">
       <div id="erFeedback"></div>
       <div class="btn-row" style="margin-top:8px;">
@@ -2167,7 +2233,7 @@ function submitEmojiRiddle(){
   if(val === er.answer.toLowerCase().replace(/\s+/g,'')){
     er.score += 10;
     er.streak += 1;
-    er.best = Math.max(er.best, er.streak);
+    if(er.streak > er.best){ er.best = er.streak; updateFunZoneScore('emoji_riddle_best', er.best); }
     if(fb) fb.innerHTML = `<div class="feedback ok">✓ Correct — "${escapeHtml(er.answer)}"!</div>`;
     setTimeout(() => { nextEmojiRiddle(); renderEmojiRiddleScreen(); }, 650);
   } else {
@@ -2197,6 +2263,7 @@ const SPEED_TYPING_SENTENCES = [
 function renderSpeedTyping(){
   const sentence = SPEED_TYPING_SENTENCES[Math.floor(Math.random() * SPEED_TYPING_SENTENCES.length)];
   const bestWpm = Number(localStorage.getItem('academy_speedtype_best') || 0);
+  if(state.speedTypingTickHandle){ clearInterval(state.speedTypingTickHandle); state.speedTypingTickHandle = null; }
   state.speedTyping = { sentence, startTime: null, done: false, bestWpm };
   renderSpeedTypingScreen();
 }
@@ -2207,12 +2274,16 @@ function renderSpeedTypingScreen(){
     <div class="card">
       <span class="eyebrow">Just for Fun</span>
       <h2>⏱️ Speed Typing</h2>
-      <p class="muted" style="margin-bottom:2px;">Type this sentence as fast and accurately as you can:</p>
+      <p class="muted" style="margin-bottom:2px;">Type this sentence, then hit Submit — try to be fast AND accurate:</p>
       <div class="feedback" style="background:var(--paper); font-weight:700; font-size:1rem;">${escapeHtml(st.sentence)}</div>
-      <textarea id="stInput" rows="3" placeholder="Start typing here…" style="margin-top:10px;" oninput="onSpeedTypingInput()"></textarea>
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-top:10px;">
+        <span class="level-badge" id="stTimerBadge">⏱️ 0.0s</span>
+        <span class="muted" style="font-size:0.8rem;">🏆 Best: ${st.bestWpm ? st.bestWpm + ' WPM' : '—'}</span>
+      </div>
+      <textarea id="stInput" rows="3" placeholder="Start typing here…" class="fun-textarea" style="margin-top:8px;" oninput="onSpeedTypingInput()" onkeydown="if(event.key==='Enter'){ event.preventDefault(); submitSpeedTyping(); }"></textarea>
       <div id="stResult"></div>
-      <p class="muted" style="font-size:0.8rem; margin-top:6px;">🏆 Your best: ${st.bestWpm ? st.bestWpm + ' WPM' : '—'}</p>
-      <div class="btn-row" style="margin-top:6px;">
+      <div class="btn-row" style="margin-top:8px;">
+        <button class="btn btn-primary" id="stSubmitBtn" onclick="submitSpeedTyping()">✓ Submit</button>
         <button class="btn btn-ghost" onclick="renderSpeedTyping()">🔄 New Sentence</button>
       </div>
       <button class="btn btn-ghost" style="margin-top:14px;" onclick="renderFunZone()">← Back to Fun Zone</button>
@@ -2225,23 +2296,48 @@ function onSpeedTypingInput(){
   const st = state.speedTyping;
   if(st.done) return;
   const input = document.getElementById('stInput');
-  const val = input.value;
-  if(st.startTime === null && val.length > 0) st.startTime = Date.now();
-  if(val.trim() === st.sentence.trim()){
-    st.done = true;
-    const seconds = Math.max(1, (Date.now() - st.startTime) / 1000);
-    const words = st.sentence.trim().split(/\s+/).length;
-    const wpm = Math.round((words / seconds) * 60);
-    const resultEl = document.getElementById('stResult');
-    let newBest = '';
-    if(wpm > st.bestWpm){
-      localStorage.setItem('academy_speedtype_best', String(wpm));
-      st.bestWpm = wpm;
-      newBest = ' 🎉 New best!';
-    }
-    if(resultEl) resultEl.innerHTML = `<div class="feedback ok">✓ Done in ${seconds.toFixed(1)}s — ${wpm} WPM!${newBest}</div>`;
-    input.disabled = true;
+  if(st.startTime === null && input.value.length > 0){
+    st.startTime = Date.now();
+    state.speedTypingTickHandle = setInterval(() => {
+      const badge = document.getElementById('stTimerBadge');
+      if(!badge){ clearInterval(state.speedTypingTickHandle); return; }
+      badge.textContent = '⏱️ ' + ((Date.now() - st.startTime) / 1000).toFixed(1) + 's';
+    }, 100);
   }
+}
+function submitSpeedTyping(){
+  const st = state.speedTyping;
+  if(st.done || st.startTime === null) return;
+  st.done = true;
+  if(state.speedTypingTickHandle){ clearInterval(state.speedTypingTickHandle); state.speedTypingTickHandle = null; }
+  const input = document.getElementById('stInput');
+  const typed = (input.value || '').trim();
+  const target = st.sentence.trim();
+  const seconds = Math.max(0.3, (Date.now() - st.startTime) / 1000);
+  const words = target.split(/\s+/).length;
+  const wpm = Math.round((words / seconds) * 60);
+  const accuracy = typingAccuracy(typed, target);
+  const resultEl = document.getElementById('stResult');
+  let newBest = '';
+  if(accuracy >= 90 && wpm > st.bestWpm){
+    localStorage.setItem('academy_speedtype_best', String(wpm));
+    st.bestWpm = wpm;
+    newBest = ' 🎉 New best!';
+    updateFunZoneScore('speed_typing_best_wpm', wpm);
+  }
+  const badgeClass = accuracy >= 90 ? 'ok' : 'bad';
+  if(resultEl) resultEl.innerHTML = `<div class="feedback ${badgeClass}">✓ ${seconds.toFixed(1)}s — ${wpm} WPM — ${accuracy}% accurate${newBest}</div>`;
+  input.disabled = true;
+  const btn = document.getElementById('stSubmitBtn');
+  if(btn) btn.disabled = true;
+}
+function typingAccuracy(typed, target){
+  const a = typed.toLowerCase(), b = target.toLowerCase();
+  const len = Math.max(a.length, b.length);
+  if(!len) return 100;
+  let matches = 0;
+  for(let i = 0; i < Math.min(a.length, b.length); i++){ if(a[i] === b[i]) matches++; }
+  return Math.max(0, Math.round((matches / len) * 100));
 }
 
 /* ---------------- Daily Spin ---------------- */
