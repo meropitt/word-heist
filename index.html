@@ -1230,7 +1230,7 @@ function persistState(){
     localStorage.setItem(STORAGE_KEY, JSON.stringify({
       teacherAuthed: state.teacherAuthed, studentCode: state.studentCode,
       lastRole: state.lastRole, lastStudentCode: state.lastStudentCode, lastStudentName: state.lastStudentName,
-      screen: state.screen
+      screen: state.screen, history: (state.history || []).slice(-20)
     }));
   }catch(e){}
 }
@@ -1262,15 +1262,26 @@ function navigateTo(screen){
   if(state.screen && state.screen !== screen) state.history.push(state.screen);
   state.screen = screen;
   persistState();
+  try{ history.pushState({ appNav:true }, '', location.href); }catch(e){}
   render();
 }
 function goBack(){
+  // Route every back action (in-app button or the phone/browser back button)
+  // through the same real history.back() call, handled once in popstate below,
+  // so both stay in sync and always land on the true previous in-app screen.
+  try{
+    if(window.history.state && window.history.state.appNav){ history.back(); return; }
+  }catch(e){}
+  applyGoBack();
+}
+function applyGoBack(){
   clearChatPoll();
   const prev = state.history.pop();
   state.screen = prev || 'roleSelect';
   persistState();
   render();
 }
+window.addEventListener('popstate', function(){ applyGoBack(); });
 
 function render(){
   if(!supabaseReady && state.screen !== 'roleSelect'){
@@ -3438,10 +3449,12 @@ async function boot(){
     state.lastRole = saved.lastRole || null;
     state.lastStudentCode = saved.lastStudentCode || null;
     state.lastStudentName = saved.lastStudentName || null;
+    const savedHistory = Array.isArray(saved.history) ? saved.history : [];
 
     if(state.teacherAuthed){
       // Already signed in as teacher — resume the exact screen they were on, if it belongs to the teacher zone.
       state.screen = TEACHER_ZONE_SCREENS.includes(saved.screen) ? saved.screen : 'teacherDashboard';
+      state.history = savedHistory.filter(s => TEACHER_ZONE_SCREENS.includes(s));
     } else if(state.studentCode){
       // Already signed in as a student — verify the code is still valid, then resume the same screen.
       try{
@@ -3451,6 +3464,7 @@ async function boot(){
           if(team){
             state.team = team; state.studentName = codeRow.student_name; state.studentXP = codeRow.xp_points || 0;
             state.screen = STUDENT_ZONE_SCREENS.includes(saved.screen) ? saved.screen : 'studentHub';
+            state.history = savedHistory.filter(s => STUDENT_ZONE_SCREENS.includes(s));
           } else { state.studentCode = null; state.screen = 'roleSelect'; }
         } else { state.studentCode = null; state.screen = 'roleSelect'; }
       }catch(e){ state.screen = 'roleSelect'; }
@@ -3458,6 +3472,7 @@ async function boot(){
       state.screen = 'roleSelect';
     }
   }
+  try{ history.replaceState({ appNav:true }, '', location.href); }catch(e){}
   render();
 }
 boot();
