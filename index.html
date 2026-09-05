@@ -2704,15 +2704,15 @@ function typingAccuracy(typed, target){
 /* ---------------- Daily Spin ---------------- */
 /* 10 equally-likely slices. Real effects — not just a message:
    - replay:   unlocks 30 more questions in today's Daily Challenge
-   - xp:       added straight to the student's XP
+   - points:   added straight to the student's points (team score + leaderboard) — not XP/level
    - mistakes: raises today's mistake limit (5 → 8) for the daily challenge
    - none:     "better luck next time" (4 of the 10 slices) */
 const DAILY_SPIN_PRIZES = [
   { type:'replay',   icon:'🔁', label:'Bonus Round — 30 more Daily Challenge questions unlocked!' },
-  { type:'xp', amount:25,  icon:'⭐', label:'+25 XP!' },
-  { type:'xp', amount:50,  icon:'⭐', label:'+50 XP!' },
-  { type:'xp', amount:75,  icon:'⭐', label:'+75 XP!' },
-  { type:'xp', amount:100, icon:'⭐', label:'+100 XP!' },
+  { type:'points', amount:25,  icon:'⭐', label:'+25 points!' },
+  { type:'points', amount:50,  icon:'⭐', label:'+50 points!' },
+  { type:'points', amount:75,  icon:'⭐', label:'+75 points!' },
+  { type:'points', amount:100, icon:'⭐', label:'+100 points!' },
   { type:'mistakes', amount:3, icon:'🛡️', label:'+3 extra mistakes allowed today!' },
   { type:'none', icon:'😅', label:'Better luck next time!' },
   { type:'none', icon:'😅', label:'Better luck next time!' },
@@ -2762,13 +2762,12 @@ function doDailySpin(ev){
 async function applyDailySpinPrize(prize){
   if(!state.studentCode) return;
   try{
-    if(prize.type === 'xp'){
+    if(prize.type === 'points'){
       const dateStr = todayStr();
-      // Award it like a real correct answer, but WITHOUT inserting a
-      // team_progress row (that would incorrectly eat one of today's 30
-      // question slots). Team score + XP update directly; the bonus_points
-      // ledger in daily_bonuses is what the leaderboard adds on top of a
-      // student's real answered-question points.
+      // Award it as real points, NOT XP (doesn't affect level). Team score updates directly;
+      // the bonus_points ledger in daily_bonuses is what the leaderboard adds on top of a
+      // student's real answered-question points. No team_progress row is inserted (that would
+      // incorrectly eat one of today's 30 question slots).
       if(state.team){
         const { data: teamRow } = await supabaseClient.from('teams').select('*').eq('team_name', state.team.team_name).maybeSingle();
         if(teamRow){
@@ -2776,12 +2775,6 @@ async function applyDailySpinPrize(prize){
           await supabaseClient.from('teams').update({ total_score: newScore }).eq('team_name', state.team.team_name);
           state.team.total_score = newScore;
         }
-      }
-      const { data: codeRow } = await supabaseClient.from('student_codes').select('*').eq('code', state.studentCode).maybeSingle();
-      if(codeRow){
-        const newXP = (codeRow.xp_points || 0) + prize.amount;
-        await supabaseClient.from('student_codes').update({ xp_points: newXP }).eq('code', state.studentCode);
-        state.studentXP = newXP;
       }
       const { data: existing } = await supabaseClient.from('daily_bonuses').select('*').eq('code', state.studentCode).eq('challenge_date', dateStr).maybeSingle();
       const row = existing || { code: state.studentCode, challenge_date: dateStr, extra_questions: 0, extra_wrongs: 0, bonus_points: 0 };
