@@ -1015,7 +1015,7 @@ async function maybeResetDailyMovieSuggestions(){
     const { data: meta } = await supabaseClient.from('movie_meta').select('*').eq('id',1).maybeSingle();
     const lastReset = meta && meta.last_reset ? new Date(meta.last_reset) : new Date(0);
     if(lastReset < boundary){
-      await supabaseClient.from('movie_suggestions').delete().neq('code','__never__');
+      await supabaseClient.from('movie_suggestions').delete();
       await supabaseClient.from('movie_meta').upsert({ id:1, last_reset: new Date().toISOString() }, { onConflict:'id' });
     }
   }catch(e){ /* non-fatal — movie spin still works even if the reset check fails */ }
@@ -1073,7 +1073,7 @@ async function renderMovieSpin(){
       <div class="divider"></div>
       <p class="muted" style="font-size:0.78rem; margin-bottom:6px;">Today's suggestions:</p>
       ${listHtml}
-      <button class="btn btn-ghost" style="margin-top:14px;" onclick="renderFunZone()">← Back to Fun Zone</button>
+      <button class="btn btn-ghost" style="margin-top:14px;" onclick="goBack()">← Back</button>
     </div>
   `;
 }
@@ -1098,10 +1098,11 @@ async function renderTeacherMovieSpin(){
   if(!state.teacherAuthed){ navigateTo('roleSelect'); return; }
   app.innerHTML = `${topbar()}<div class="card"><p class="muted center-note">Loading movie night…</p></div>`;
   await maybeResetDailyMovieSuggestions();
-  const [suggestions, winner, history] = await Promise.all([
+  const [suggestions, winner, historyData] = await Promise.all([
     fetchTodayMovieSuggestions(), fetchTodayMovieWinner(),
-    supabaseClient.from('movie_spin_results').select('*').order('win_date', { ascending:false }).limit(10).then(r => r.data || [])
+    supabaseClient.from('movie_spin_results').select('*').order('win_date', { ascending:false }).limit(10)
   ]);
+  const history = historyData.data || [];
   const cutoffPassed = movieSuggestionsCutoffPassed();
 
   const listHtml = suggestions.length ? suggestions.map(s => `
@@ -1501,6 +1502,13 @@ function render(){
     duelPlay: renderDuelPlay,
     teacherDuels: renderTeacherDuels,
     teacherMovieSpin: renderTeacherMovieSpin,
+    funZone: renderFunZone,
+    wordBlitz: renderWordBlitz,
+    emojiRiddle: renderEmojiRiddle,
+    speedTyping: renderSpeedTyping,
+    dailySpin: renderDailySpin,
+    movieSpin: renderMovieSpin,
+    funZoneLeaderboard: renderFunZoneLeaderboard,
     helpGuide: renderHelpGuide,
     chatRoom: renderChatRoom,
   };
@@ -1697,9 +1705,13 @@ function renderStudentHub(){
       <div class="icon">📅</div>
       <div><h3>Today's Challenge</h3><p class="muted" style="margin:0;">30 daily questions, adaptive difficulty.</p></div>
     </div>
-    <div class="card role-card" onclick="renderFunZone()">
+    <div class="card role-card" onclick="navigateTo('funZone')">
       <div class="icon">🎉</div>
       <div><h3>Fun Zone</h3><p class="muted" style="margin:0;">Word games — just for fun, anytime.</p></div>
+    </div>
+    <div class="card role-card" onclick="navigateTo('movieSpin')">
+      <div class="icon">🎬</div>
+      <div><h3>Movie Night Spin</h3><p class="muted" style="margin:0;">Suggest a movie and see what tonight's spin picks.</p></div>
     </div>
     <div class="card role-card" onclick="goDuels()">
       <div class="icon">⚔️</div>
@@ -2257,7 +2269,7 @@ function renderWordBlitzScreen(){
         <button class="btn btn-primary" onclick="submitWordBlitz()">Check</button>
         <button class="btn btn-ghost" onclick="skipWordBlitz()">Skip ⏭</button>
       </div>
-      <button class="btn btn-ghost" style="margin-top:14px;" onclick="renderFunZone()">← Back to Fun Zone</button>
+      <button class="btn btn-ghost" style="margin-top:14px;" onclick="goBack()">← Back to Fun Zone</button>
     </div>
   `;
   const input = document.getElementById('wbInput');
@@ -2298,14 +2310,14 @@ function renderFunZone(){
       <h2>🎉 Fun Zone</h2>
       <p class="muted">No points, no pressure — just some fun word games, anytime.</p>
       <div class="btn-row" style="flex-direction:column; align-items:stretch; gap:10px; margin-top:10px;">
-        <button class="btn btn-primary" onclick="renderWordBlitz()">🔤 Word Blitz — unscramble the word</button>
-        <button class="btn btn-primary" onclick="renderEmojiRiddle()">🧩 Emoji Riddle — guess the word from the sounds</button>
-        <button class="btn btn-primary" onclick="renderSpeedTyping()">⏱️ Speed Typing — how fast can you type?</button>
-        <button class="btn btn-primary" onclick="renderDailySpin()">🎁 Daily Spin — one free spin a day</button>
-        <button class="btn btn-primary" onclick="renderMovieSpin()">🎬 Movie Night Spin — suggest & discover tonight's movie</button>
-        <button class="btn btn-ghost" onclick="renderFunZoneLeaderboard()">🏆 Fun Zone Leaderboard</button>
+        <button class="btn btn-primary" onclick="navigateTo('wordBlitz')">🔤 Word Blitz — unscramble the word</button>
+        <button class="btn btn-primary" onclick="navigateTo('emojiRiddle')">🧩 Emoji Riddle — guess the word from the sounds</button>
+        <button class="btn btn-primary" onclick="navigateTo('speedTyping')">⏱️ Speed Typing — how fast can you type?</button>
+        <button class="btn btn-primary" onclick="navigateTo('dailySpin')">🎁 Daily Spin — one free spin a day</button>
+        <button class="btn btn-primary" onclick="navigateTo('movieSpin')">🎬 Movie Night Spin — suggest & discover tonight's movie</button>
+        <button class="btn btn-ghost" onclick="navigateTo('funZoneLeaderboard')">🏆 Fun Zone Leaderboard</button>
       </div>
-      <button class="btn btn-ghost" style="margin-top:14px;" onclick="navigateTo('studentHub')">← Back</button>
+      <button class="btn btn-ghost" style="margin-top:14px;" onclick="goBack()">← Back</button>
     </div>
   `;
 }
@@ -2354,11 +2366,11 @@ async function renderFunZoneLeaderboard(){
       ${section('🧩 Emoji Riddle — best streak', 'emoji_riddle_best', '')}
       ${section('⏱️ Speed Typing — best WPM', 'speed_typing_best_wpm', ' WPM')}
       <div class="card">
-        <button class="btn btn-ghost" onclick="renderFunZone()">← Back to Fun Zone</button>
+        <button class="btn btn-ghost" onclick="goBack()">← Back to Fun Zone</button>
       </div>
     `;
   }catch(e){
-    app.innerHTML = `${topbar()}<div class="card"><p class="muted center-note">Couldn't load the leaderboard right now.</p><button class="btn btn-ghost" style="margin-top:10px;" onclick="renderFunZone()">← Back to Fun Zone</button></div>`;
+    app.innerHTML = `${topbar()}<div class="card"><p class="muted center-note">Couldn't load the leaderboard right now.</p><button class="btn btn-ghost" style="margin-top:10px;" onclick="goBack()">← Back to Fun Zone</button></div>`;
   }
 }
 
@@ -2419,7 +2431,7 @@ function renderEmojiRiddleScreen(){
         <button class="btn btn-primary" onclick="submitEmojiRiddle()">Check</button>
         <button class="btn btn-ghost" onclick="skipEmojiRiddle()">Skip ⏭</button>
       </div>
-      <button class="btn btn-ghost" style="margin-top:14px;" onclick="renderFunZone()">← Back to Fun Zone</button>
+      <button class="btn btn-ghost" style="margin-top:14px;" onclick="goBack()">← Back to Fun Zone</button>
     </div>
   `;
   const input = document.getElementById('erInput');
@@ -2485,9 +2497,9 @@ function renderSpeedTypingScreen(){
       <div id="stResult"></div>
       <div class="btn-row" style="margin-top:8px;">
         <button class="btn btn-primary" id="stSubmitBtn" onclick="submitSpeedTyping()">✓ Submit</button>
-        <button class="btn btn-ghost" onclick="renderSpeedTyping()">🔄 New Sentence</button>
+        <button class="btn btn-ghost" onclick="navigateTo('speedTyping')">🔄 New Sentence</button>
       </div>
-      <button class="btn btn-ghost" style="margin-top:14px;" onclick="renderFunZone()">← Back to Fun Zone</button>
+      <button class="btn btn-ghost" style="margin-top:14px;" onclick="goBack()">← Back to Fun Zone</button>
     </div>
   `;
   const input = document.getElementById('stInput');
@@ -2583,7 +2595,7 @@ function renderDailySpin(){
         ? `<div class="feedback ok">${usedToday.icon} ${escapeHtml(usedToday.label)}</div><p class="muted" style="font-size:0.8rem; margin-top:6px;">Come back tomorrow for another spin!</p>`
         : `<button class="btn btn-primary" onclick="doDailySpin(event)">🎯 Spin Now</button>`}
       ${spinPrizeContentsHtml()}
-      <button class="btn btn-ghost" style="margin-top:4px;" onclick="renderFunZone()">← Back to Fun Zone</button>
+      <button class="btn btn-ghost" style="margin-top:4px;" onclick="goBack()">← Back to Fun Zone</button>
     </div>
   `;
 }
@@ -4057,7 +4069,7 @@ async function endDuelManually(duelId, scores){
    BOOT — restore where the user left off on refresh
    ============================================================ */
 const TEACHER_ZONE_SCREENS = ['teacherDashboard','teacherDuels','teacherMovieSpin','standings','helpGuide','chatRoom'];
-const STUDENT_ZONE_SCREENS = ['studentHub','studentChallenge','standings','duelCodeEntry','duelList','duelPlay','helpGuide','chatRoom'];
+const STUDENT_ZONE_SCREENS = ['studentHub','studentChallenge','standings','duelCodeEntry','duelList','duelPlay','helpGuide','chatRoom','funZone','wordBlitz','emojiRiddle','speedTyping','dailySpin','movieSpin','funZoneLeaderboard'];
 
 async function boot(){
   try{ history.replaceState({ __appNav:true }, '', location.href); }catch(e){}
