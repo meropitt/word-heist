@@ -1594,7 +1594,7 @@ function render(){
     setTimeout(render, 400);
     return;
   }
-  document.body.classList.toggle('has-bottom-nav', !!(state.studentCode && !state.teacherAuthed));
+  document.body.classList.toggle('has-bottom-nav', !!(state.studentCode || state.teacherAuthed));
   const map = {
     roleSelect: renderRoleSelect,
     teacherLogin: renderTeacherLogin,
@@ -1607,6 +1607,7 @@ function render(){
     duelList: renderDuelList,
     duelPlay: renderDuelPlay,
     teacherDuels: renderTeacherDuels,
+    teacherTeams: renderTeacherTeams,
     teacherMovieSpin: renderTeacherMovieSpin,
     funZone: renderFunZone,
     wordBlitz: renderWordBlitz,
@@ -1642,6 +1643,15 @@ const STUDENT_TABS = [
   { screen: 'funZone',         icon: '🎮', label: 'Fun' },
   { screen: 'helpGuide',       icon: '📖', label: 'Guide' },
 ];
+const TEACHER_TABS = [
+  { screen: 'teacherDashboard', icon: '🏠', label: 'Home' },
+  { screen: 'teacherTeams',     icon: '👥', label: 'Teams' },
+  { screen: 'teacherDuels',     icon: '⚔️', label: 'Duels' },
+  { screen: 'teacherMovieSpin', icon: '🎬', label: 'Movies' },
+  { screen: 'standings',        icon: '🏅', label: 'Ranks' },
+  { screen: 'chatRoom',         icon: '💬', label: 'Chat' },
+  { screen: 'helpGuide',        icon: '📖', label: 'Guide' },
+];
 // Deep sub-screens always exit to one fixed, predictable parent — never a dynamic history stack.
 const SCREEN_PARENT = {
   studentCodeEntry: 'roleSelect',
@@ -1654,19 +1664,22 @@ const SCREEN_PARENT = {
   dailySpin: 'funZone',
   movieSpin: 'funZone',
   funZoneLeaderboard: 'funZone',
-  teacherDuels: 'teacherDashboard',
-  teacherMovieSpin: 'teacherDashboard',
 };
-function activeStudentTab(){
-  if(STUDENT_TABS.some(t => t.screen === state.screen)) return state.screen;
-  return SCREEN_PARENT[state.screen] || 'studentHub';
+function currentTabSet(){
+  return state.teacherAuthed ? TEACHER_TABS : STUDENT_TABS;
+}
+function activeTabScreen(){
+  const tabs = currentTabSet();
+  if(tabs.some(t => t.screen === state.screen)) return state.screen;
+  return SCREEN_PARENT[state.screen] || tabs[0].screen;
 }
 function bottomNavHtml(){
-  if(state.teacherAuthed || !state.studentCode) return '';
-  const active = activeStudentTab();
+  if(!state.teacherAuthed && !state.studentCode) return '';
+  const tabs = currentTabSet();
+  const active = activeTabScreen();
   return `
     <div class="bottom-nav">
-      ${STUDENT_TABS.map(t => `
+      ${tabs.map(t => `
         <button class="bottom-nav-item ${t.screen===active?'active':''}" onclick="navigateTo('${t.screen}')">
           <span class="bn-icon">${t.icon}</span><span class="bn-label">${t.label}</span>
         </button>
@@ -1997,7 +2010,22 @@ async function renderTeacherDashboard(){
     </div>
 
     ${insightsCardHtml(teamList, studentList, progressList, challenge)}
+  `;
+}
 
+async function renderTeacherTeams(){
+  if(!state.teacherAuthed){ navigateTo('teacherLogin'); return; }
+  app.innerHTML = `${topbar()}<div class="card"><p class="muted center-note">Loading teams…</p></div>`;
+
+  const [{ data: teams }, { data: students }] = await Promise.all([
+    supabaseClient.from('teams').select('*').order('created_at', { ascending:true }),
+    supabaseClient.from('student_codes').select('*').order('team_name', { ascending:true })
+  ]);
+  const teamList = teams || [];
+  const studentList = students || [];
+
+  app.innerHTML = `
+    ${topbar()}
     <div class="card">
       <span class="eyebrow">Teams (${teamList.length})</span>
       <h2>Manage Teams</h2>
@@ -2051,31 +2079,6 @@ async function renderTeacherDashboard(){
       <button class="btn btn-primary" onclick="addStudent()">Add Student &amp; Generate Code</button>
       <div id="newStudentResult"></div>
     </div>
-
-    <div class="card" style="cursor:pointer;" onclick="navigateTo('teacherDuels')">
-      <h3>⚔️ Manage Challenges</h3>
-      <p class="muted" style="margin:0;">Create head-to-head duels between teams or players.</p>
-    </div>
-
-    <div class="card" style="cursor:pointer;" onclick="navigateTo('teacherMovieSpin')">
-      <h3>🎬 Movie Spin</h3>
-      <p class="muted" style="margin:0;">Open movie suggestions, set when they close, and spin to pick the winner.</p>
-    </div>
-
-    <div class="card" style="cursor:pointer;" onclick="goStandings()">
-      <h3>🏅 View Full Standings</h3>
-      <p class="muted" style="margin:0;">Open the league table.</p>
-    </div>
-
-    <div class="card" style="cursor:pointer;" onclick="navigateTo('chatRoom')">
-      <h3>💬 Class Chat</h3>
-      <p class="muted" style="margin:0;">Open the general chat with your students.</p>
-    </div>
-
-    <div class="card" style="cursor:pointer;" onclick="navigateTo('helpGuide')">
-      <h3>📖 Levels, Badges &amp; Titles Guide</h3>
-      <p class="muted" style="margin:0;">What students see, and how they earn each one — share this with your class.</p>
-    </div>
   `;
 }
 
@@ -2098,20 +2101,20 @@ async function addTeam(){
     resultEl.innerHTML = `<div class="feedback bad">Could not add team: ${escapeHtml(result.error.message || String(result.error))}</div>`;
     return;
   }
-  renderTeacherDashboard();
+  renderTeacherTeams();
 }
 
 async function updateMaxMembers(teamName){
   const input = document.getElementById('maxMembers-' + teamName);
   const val = Math.max(1, parseInt(input.value, 10) || 1);
   await supabaseClient.from('teams').update({ max_members: val }).eq('team_name', teamName);
-  renderTeacherDashboard();
+  renderTeacherTeams();
 }
 
 async function deleteTeam(name){
   if(!confirm('Remove team "' + name + '"? Students on this team will need to be reassigned. This cannot be undone.')) return;
   await supabaseClient.from('teams').delete().eq('team_name', name);
-  renderTeacherDashboard();
+  renderTeacherTeams();
 }
 
 function generateCode(){
@@ -2135,7 +2138,7 @@ async function addStudent(){
   }
   resultEl.innerHTML = `<div class="feedback ok">✓ Added! ${escapeHtml(name)}'s code is <strong>${code}</strong>. Now assign them to a team below.</div>`;
   nameEl.value = '';
-  renderTeacherDashboard();
+  renderTeacherTeams();
 }
 
 async function assignStudentTeam(code, teamName){
@@ -2147,18 +2150,18 @@ async function assignStudentTeam(code, teamName){
     const currentCount = (students || []).filter(s => s.code !== code).length;
     if(team && currentCount >= team.max_members){
       alert('Team "' + teamName + '" is full (' + team.max_members + ' students max). Increase its limit or pick another team.');
-      renderTeacherDashboard();
+      renderTeacherTeams();
       return;
     }
   }
   await supabaseClient.from('student_codes').update({ team_name: teamName || null }).eq('code', code);
-  renderTeacherDashboard();
+  renderTeacherTeams();
 }
 
 async function deleteStudent(code){
   if(!confirm('Remove this student code? They will no longer be able to log in with it.')) return;
   await supabaseClient.from('student_codes').delete().eq('code', code);
-  renderTeacherDashboard();
+  renderTeacherTeams();
 }
 
 async function startChallenge(dayIndex){
@@ -4236,7 +4239,7 @@ async function endDuelManually(duelId, scores){
 /* ============================================================
    BOOT — restore where the user left off on refresh
    ============================================================ */
-const TEACHER_ZONE_SCREENS = ['teacherDashboard','teacherDuels','teacherMovieSpin','standings','helpGuide','chatRoom'];
+const TEACHER_ZONE_SCREENS = ['teacherDashboard','teacherTeams','teacherDuels','teacherMovieSpin','standings','helpGuide','chatRoom'];
 const STUDENT_ZONE_SCREENS = ['studentHub','studentChallenge','standings','duelCodeEntry','duelList','duelPlay','helpGuide','chatRoom','funZone','wordBlitz','emojiRiddle','speedTyping','dailySpin','movieSpin','funZoneLeaderboard'];
 
 async function boot(){
