@@ -1012,48 +1012,35 @@ async function renderChatRoom(){
 }
 
 /* ---------------- Movie Night Spin ---------------- */
-/* Suggestions: one per student per day, locked once submitted, closes at
-   10:00 PM local time. Cleared automatically every day at 5:00 AM — but
-   the day's WINNER (once the teacher spins) is kept forever in
-   movie_spin_results so it always still shows in the spin screen. */
-function movieSuggestionsCutoffPassed(){ return new Date().getHours() >= 22; }
-
-async function maybeResetDailyMovieSuggestions(){
+/* The teacher opens a "round": suggestions are open until the date/time
+   the teacher picks (shown to students). One suggestion per student per
+   round, locked once sent. After the close time, the teacher spins once;
+   the winner stays visible until the teacher opens a new round. */
+function fmtRoundTime(iso){
   try{
-    const now = new Date();
-    const boundary = new Date(now);
-    boundary.setHours(5,0,0,0);
-    if(boundary > now) boundary.setDate(boundary.getDate() - 1);
-    const { data: meta } = await supabaseClient.from('movie_meta').select('*').eq('id',1).maybeSingle();
-    const lastReset = meta && meta.last_reset ? new Date(meta.last_reset) : new Date(0);
-    if(lastReset < boundary){
-      await supabaseClient.from('movie_suggestions').delete();
-      await supabaseClient.from('movie_meta').upsert({ id:1, last_reset: new Date().toISOString() }, { onConflict:'id' });
-    }
-  }catch(e){ /* non-fatal — movie spin still works even if the reset check fails */ }
+    return new Date(iso).toLocaleString([], { weekday:'short', month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' });
+  }catch(e){ return iso; }
 }
 
-async function fetchTodayMovieSuggestions(){
-  const dateStr = todayStr();
-  const { data, error } = await supabaseClient.from('movie_suggestions').select('*').eq('suggestion_date', dateStr).order('created_at', { ascending:true });
+async function fetchCurrentMovieRound(){
+  const { data, error } = await supabaseClient.from('movie_round').select('*').order('id', { ascending:false }).limit(1);
+  if(error) throw error;
+  return (data && data[0]) || null;
+}
+
+async function fetchMovieSuggestionsForRound(roundId){
+  const { data, error } = await supabaseClient.from('movie_suggestions').select('*').eq('round_id', roundId).order('created_at', { ascending:true });
   if(error) throw error;
   return data || [];
-}
-
-async function fetchTodayMovieWinner(){
-  const dateStr = todayStr();
-  const { data, error } = await supabaseClient.from('movie_spin_results').select('*').eq('win_date', dateStr).maybeSingle();
-  if(error) throw error;
-  return data || null;
 }
 
 async function renderMovieSpin(){
   if(!state.studentCode){ navigateTo('roleSelect'); return; }
   app.innerHTML = `${topbar()}<div class="card"><p class="muted center-note">Loading movie night…</p></div>`;
-  await maybeResetDailyMovieSuggestions();
-  let suggestions, winner;
+  let round, suggestions = [];
   try{
-    [suggestions, winner] = await Promise.all([fetchTodayMovieSuggestions(), fetchTodayMovieWinner()]);
+    round = await fetchCurrentMovieRound();
+    if(round) suggestions = await fetchMovieSuggestionsForRound(round.id);
   }catch(e){
     console.error('renderMovieSpin failed', e);
     app.innerHTML = `
@@ -1065,30 +1052,43 @@ async function renderMovieSpin(){
       </div>`;
     return;
   }
-  const mine = suggestions.find(s => s.code === state.studentCode);
-  const cutoffPassed = movieSuggestionsCutoffPassed();
 
-  const winnerHtml = winner ? `
-    <div class="feedback ok" style="margin-bottom:12px;">🏆 Tonight's Movie: <strong>${escapeHtml(winner.movie_title)}</strong> (suggested by ${escapeHtml(winner.student_name||'')})</div>
+  if(!round){
+    app.innerHTML = `
+      ${topbar()}
+      <div class="card">
+        <span class="eyebrow">Just for Fun</span>
+        <h2>🎬 Movie Night Spin</h2>
+        <p class="muted">Your teacher hasn't opened movie suggestions yet — check back later!</p>
+        <button class="btn btn-ghost" style="margin-top:14px;" onclick="goBack()">← Back</button>
+      </div>`;
+    return;
+  }
+
+  const isOpen = !round.spun && new Date() < new Date(round.closes_at);
+  const mine = suggestions.find(s => s.code === state.studentCode);
+
+  const winnerHtml = round.spun ? `
+    <div class="feedback ok" style="margin-bottom:12px;">🏆 The Movie: <strong>${escapeHtml(round.winner_movie)}</strong> (suggested by ${escapeHtml(round.winner_name||'')})</div>
   ` : `
-    <p class="muted" style="font-size:0.82rem; margin-bottom:12px;">${cutoffPassed ? '⏳ Suggestions are closed for today — waiting for your teacher to spin!' : '🕙 Suggestions close today at 10:00 PM.'}</p>
+    <p class="muted" style="font-size:0.82rem; margin-bottom:12px;">${isOpen ? `🕙 Suggestions close: <strong>${fmtRoundTime(round.closes_at)}</strong>` : '⏳ Suggestions are closed — waiting for your teacher to spin!'}</p>
   `;
 
-  const formHtml = mine ? `
-    <div class="feedback ok" style="margin-bottom:10px;">🎬 Your suggestion: <strong>${escapeHtml(mine.movie_title)}</strong> (locked for today)</div>
-  ` : cutoffPassed ? `
-    <p class="muted" style="font-size:0.82rem; margin-bottom:10px;">Suggestions are closed for today. Try again tomorrow!</p>
+  const formHtml = round.spun ? '' : mine ? `
+    <div class="feedback ok" style="margin-bottom:10px;">🎬 Your suggestion: <strong>${escapeHtml(mine.movie_title)}</strong> (locked for this round)</div>
+  ` : !isOpen ? `
+    <p class="muted" style="font-size:0.82rem; margin-bottom:10px;">Suggestions are closed for this round.</p>
   ` : `
     <div class="pill-input-row" style="margin-bottom:10px;">
       <input id="movieTitleInput" type="text" maxlength="60" placeholder="Suggest a movie…" onkeydown="if(event.key==='Enter'){ submitMovieSuggestion(); }" />
       <button class="btn btn-primary" onclick="submitMovieSuggestion()">Suggest</button>
     </div>
-    <p class="muted" style="font-size:0.75rem; margin-bottom:10px;">One suggestion per day — you can't change or delete it once sent.</p>
+    <p class="muted" style="font-size:0.75rem; margin-bottom:10px;">One suggestion per round — you can't change or delete it once sent.</p>
   `;
 
   const listHtml = suggestions.length ? suggestions.map(s => `
     <div class="student-row"><span>🎬 ${escapeHtml(s.movie_title)}</span><span class="muted">${escapeHtml(s.student_name||s.code)}</span></div>
-  `).join('') : `<p class="muted">No suggestions yet today — be the first!</p>`;
+  `).join('') : `<p class="muted">No suggestions yet — be the first!</p>`;
 
   app.innerHTML = `
     ${topbar()}
@@ -1098,7 +1098,7 @@ async function renderMovieSpin(){
       ${winnerHtml}
       ${formHtml}
       <div class="divider"></div>
-      <p class="muted" style="font-size:0.78rem; margin-bottom:6px;">Today's suggestions:</p>
+      <p class="muted" style="font-size:0.78rem; margin-bottom:6px;">Suggestions so far:</p>
       ${listHtml}
       <button class="btn btn-ghost" style="margin-top:14px;" onclick="goBack()">← Back</button>
     </div>
@@ -1109,16 +1109,17 @@ async function submitMovieSuggestion(){
   const input = document.getElementById('movieTitleInput');
   const title = input ? input.value.trim() : '';
   if(!title) return;
-  if(movieSuggestionsCutoffPassed()){ renderMovieSpin(); return; }
   const btn = event && event.target;
   if(btn) btn.disabled = true;
   try{
-    const { data: existing, error: selErr } = await supabaseClient.from('movie_suggestions').select('code').eq('code', state.studentCode).eq('suggestion_date', todayStr()).maybeSingle();
+    const round = await fetchCurrentMovieRound();
+    if(!round || round.spun || new Date() >= new Date(round.closes_at)){ renderMovieSpin(); return; }
+    const { data: existing, error: selErr } = await supabaseClient.from('movie_suggestions').select('code').eq('code', state.studentCode).eq('round_id', round.id).maybeSingle();
     if(selErr) throw selErr;
     if(existing){ renderMovieSpin(); return; }
     const { error: insErr } = await supabaseClient.from('movie_suggestions').insert({
-      code: state.studentCode, student_name: state.studentName, team_name: state.team ? state.team.team_name : null,
-      movie_title: title, suggestion_date: todayStr()
+      round_id: round.id, code: state.studentCode, student_name: state.studentName,
+      team_name: state.team ? state.team.team_name : null, movie_title: title
     });
     if(insErr) throw insErr;
     renderMovieSpin();
@@ -1137,14 +1138,10 @@ async function submitMovieSuggestion(){
 async function renderTeacherMovieSpin(){
   if(!state.teacherAuthed){ navigateTo('roleSelect'); return; }
   app.innerHTML = `${topbar()}<div class="card"><p class="muted center-note">Loading movie night…</p></div>`;
-  await maybeResetDailyMovieSuggestions();
-  let suggestions, winner, historyData;
+  let round, suggestions = [];
   try{
-    [suggestions, winner, historyData] = await Promise.all([
-      fetchTodayMovieSuggestions(), fetchTodayMovieWinner(),
-      supabaseClient.from('movie_spin_results').select('*').order('win_date', { ascending:false }).limit(10)
-    ]);
-    if(historyData.error) throw historyData.error;
+    round = await fetchCurrentMovieRound();
+    if(round) suggestions = await fetchMovieSuggestionsForRound(round.id);
   }catch(e){
     console.error('renderTeacherMovieSpin failed', e);
     app.innerHTML = `
@@ -1156,60 +1153,88 @@ async function renderTeacherMovieSpin(){
       </div>`;
     return;
   }
-  const history = historyData.data || [];
-  const cutoffPassed = movieSuggestionsCutoffPassed();
 
-  const listHtml = suggestions.length ? suggestions.map(s => `
-    <div class="student-row"><span>🎬 ${escapeHtml(s.movie_title)}</span><span class="muted">${escapeHtml(s.student_name||s.code)}</span></div>
-  `).join('') : `<p class="muted">No suggestions yet today.</p>`;
+  const openRoundFormHtml = `
+    <div style="text-align:left; margin-top:10px;">
+      <label class="muted" style="font-size:0.78rem;">Suggestions close on:</label>
+      <input id="movieCloseInput" type="datetime-local" style="width:100%; margin:6px 0 10px; padding:12px; border-radius:12px; border:1.5px solid var(--line); font-family:var(--font-body);" />
+      <button class="btn btn-primary" onclick="openMovieRound()">📢 Open Suggestions</button>
+    </div>
+  `;
 
-  let actionHtml;
-  if(winner){
-    actionHtml = `<div class="feedback ok">🏆 Already spun today: <strong>${escapeHtml(winner.movie_title)}</strong></div><p class="muted" style="font-size:0.8rem; margin-top:6px;">Only one spin per day — come back tomorrow.</p>`;
-  } else if(!cutoffPassed){
-    actionHtml = `<p class="muted" style="font-size:0.82rem;">🕙 Suggestions are still open until 10:00 PM — you can spin once they close.</p>`;
-  } else if(!suggestions.length){
-    actionHtml = `<p class="muted" style="font-size:0.82rem;">No suggestions came in today, so there's nothing to spin.</p>`;
+  let bodyHtml;
+  if(!round || round.spun){
+    bodyHtml = `
+      ${round && round.spun ? `<div class="feedback ok">🏆 Last winner: <strong>${escapeHtml(round.winner_movie)}</strong></div>` : `<p class="muted" style="font-size:0.82rem;">No round has been opened yet.</p>`}
+      ${openRoundFormHtml}
+    `;
   } else {
-    actionHtml = `<div id="teacherSpinWheel" style="font-size:3rem; margin:10px 0; transition: transform 2.2s cubic-bezier(.15,.85,.25,1);">🎬</div><button class="btn btn-primary" onclick="doTeacherMovieSpin()">🎯 Spin Now</button>`;
-  }
+    const isOpen = new Date() < new Date(round.closes_at);
+    const listHtml = suggestions.length ? suggestions.map(s => `
+      <div class="student-row"><span>🎬 ${escapeHtml(s.movie_title)}</span><span class="muted">${escapeHtml(s.student_name||s.code)}</span></div>
+    `).join('') : `<p class="muted">No suggestions yet.</p>`;
 
-  const historyHtml = history.length ? history.map(h => `
-    <div class="student-row"><span>${escapeHtml(h.win_date)}</span><span class="muted">🏆 ${escapeHtml(h.movie_title)}</span></div>
-  `).join('') : `<p class="muted" style="font-size:0.8rem;">No past winners yet.</p>`;
+    let actionHtml;
+    if(isOpen){
+      actionHtml = `<p class="muted" style="font-size:0.82rem;">🕙 Suggestions open until <strong>${fmtRoundTime(round.closes_at)}</strong>.</p><button class="btn btn-ghost" style="margin-top:8px;" onclick="closeMovieRoundNow()">⏹ Close Suggestions Now</button>`;
+    } else if(!suggestions.length){
+      actionHtml = `<p class="muted" style="font-size:0.82rem;">No suggestions came in, so there's nothing to spin.</p>${openRoundFormHtml}`;
+    } else {
+      actionHtml = `<div id="teacherSpinWheel" style="font-size:3rem; margin:10px 0; transition: transform 2.2s cubic-bezier(.15,.85,.25,1);">🎬</div><button class="btn btn-primary" onclick="doTeacherMovieSpin()">🎯 Spin Now</button>`;
+    }
+    bodyHtml = `
+      ${actionHtml}
+      <div class="divider"></div>
+      <p class="muted" style="font-size:0.78rem; margin-bottom:6px; text-align:left;">Suggestions (${suggestions.length}):</p>
+      <div style="text-align:left;">${listHtml}</div>
+    `;
+  }
 
   app.innerHTML = `
     ${topbar()}
     <div class="card" style="text-align:center;">
       <span class="eyebrow">Class Fun</span>
       <h2>🎬 Movie Spin</h2>
-      ${actionHtml}
-      <div class="divider"></div>
-      <p class="muted" style="font-size:0.78rem; margin-bottom:6px; text-align:left;">Today's suggestions (${suggestions.length}):</p>
-      <div style="text-align:left;">${listHtml}</div>
-      <div class="divider"></div>
-      <p class="muted" style="font-size:0.78rem; margin-bottom:6px; text-align:left;">Previous winners:</p>
-      <div style="text-align:left;">${historyHtml}</div>
-      <button class="btn btn-ghost" style="margin-top:14px;" onclick="navigateTo('teacherDashboard')">← Back to Dashboard</button>
+      ${bodyHtml}
+      <button class="btn btn-ghost" style="margin-top:14px;" onclick="goBack()">← Back to Dashboard</button>
     </div>
   `;
 }
 
+async function openMovieRound(){
+  const input = document.getElementById('movieCloseInput');
+  if(!input || !input.value){ input && input.focus(); return; }
+  const closesAt = new Date(input.value);
+  if(isNaN(closesAt.getTime()) || closesAt <= new Date()) return;
+  try{
+    await supabaseClient.from('movie_round').insert({ closes_at: closesAt.toISOString() });
+  }catch(e){ console.error('openMovieRound failed', e); }
+  renderTeacherMovieSpin();
+}
+
+async function closeMovieRoundNow(){
+  const round = await fetchCurrentMovieRound();
+  if(!round || round.spun) { renderTeacherMovieSpin(); return; }
+  try{
+    await supabaseClient.from('movie_round').update({ closes_at: new Date().toISOString() }).eq('id', round.id);
+  }catch(e){ console.error('closeMovieRoundNow failed', e); }
+  renderTeacherMovieSpin();
+}
+
 async function doTeacherMovieSpin(){
-  const suggestions = await fetchTodayMovieSuggestions();
+  const round = await fetchCurrentMovieRound();
+  if(!round || round.spun) { renderTeacherMovieSpin(); return; }
+  const suggestions = await fetchMovieSuggestionsForRound(round.id);
   if(!suggestions.length) return;
   const wheel = document.getElementById('teacherSpinWheel');
   const pick = suggestions[Math.floor(Math.random() * suggestions.length)];
   if(wheel) wheel.style.transform = `rotate(${720 + Math.floor(Math.random()*360)}deg)`;
   setTimeout(async () => {
     try{
-      const dateStr = todayStr();
-      const { data: existing } = await supabaseClient.from('movie_spin_results').select('win_date').eq('win_date', dateStr).maybeSingle();
-      if(!existing){
-        await supabaseClient.from('movie_spin_results').insert({
-          win_date: dateStr, movie_title: pick.movie_title, student_code: pick.code, student_name: pick.student_name, spun_at: new Date().toISOString()
-        });
-      }
+      await supabaseClient.from('movie_round').update({
+        spun: true, winner_movie: pick.movie_title, winner_code: pick.code,
+        winner_name: pick.student_name, spun_at: new Date().toISOString()
+      }).eq('id', round.id).eq('spun', false);
     }catch(e){ console.error('doTeacherMovieSpin failed', e); }
     renderTeacherMovieSpin();
   }, 1600);
@@ -1519,10 +1544,16 @@ function navigateTo(screen){
 }
 /* Every "Back" action — the in-app ← Back button, the browser's own back
    button, and the phone's hardware/gesture back — must behave identically
-   and never leave a stale/duplicate screen. The in-app button simply asks
-   the browser to go back; the actual app-state change happens in ONE
-   place: the popstate handler below. This keeps the browser's history and
-   the app's screen in sync no matter which "back" the user used. */
+   and predictably: they always return to the main menu (Student Hub /
+   Teacher Dashboard). Pressing Back from the main menu itself logs out
+   to the role-select (login) screen. The in-app button simply asks the
+   browser to go back; the actual app-state change happens in ONE place:
+   the popstate handler below. */
+function mainHubScreen(){
+  if(state.teacherAuthed) return 'teacherDashboard';
+  if(state.studentCode) return 'studentHub';
+  return 'roleSelect';
+}
 function goBack(){
   try{ history.back(); }
   catch(e){ popStateGoBack(); }
@@ -1530,8 +1561,13 @@ function goBack(){
 function popStateGoBack(){
   clearChatPoll();
   clearDuelTimer();
-  const prev = state.history.pop();
-  state.screen = prev || 'roleSelect';
+  const hub = mainHubScreen();
+  if(state.screen === hub){
+    goRoleSelect();
+    return;
+  }
+  state.screen = hub;
+  state.history = [];
   persistState();
   render();
 }
@@ -1768,7 +1804,7 @@ function renderStudentHub(){
     </div>
     <div class="card role-card" onclick="navigateTo('movieSpin')">
       <div class="icon">🎬</div>
-      <div><h3>Movie Night Spin</h3><p class="muted" style="margin:0;">Suggest a movie and see what tonight's spin picks.</p></div>
+      <div><h3>Movie Night Spin</h3><p class="muted" style="margin:0;">Suggest a movie and see when your teacher spins for a winner.</p></div>
     </div>
     <div class="card role-card" onclick="goDuels()">
       <div class="icon">⚔️</div>
@@ -1970,7 +2006,7 @@ async function renderTeacherDashboard(){
 
     <div class="card" style="cursor:pointer;" onclick="navigateTo('teacherMovieSpin')">
       <h3>🎬 Movie Spin</h3>
-      <p class="muted" style="margin:0;">Review tonight's movie suggestions and spin to pick the winner (once a day, after 10 PM).</p>
+      <p class="muted" style="margin:0;">Open movie suggestions, set when they close, and spin to pick the winner.</p>
     </div>
 
     <div class="card" style="cursor:pointer;" onclick="goStandings()">
@@ -2172,12 +2208,12 @@ async function showMyDailyAnswers(dateStr){
         <h2>📋 Your Answers</h2>
         <p class="muted" style="font-size:0.8rem;">${correctCount}/${sorted.length} correct</p>
         ${rowsHtml || '<p class="muted">No answers recorded for this day.</p>'}
-        <button class="btn btn-ghost" style="margin-top:14px;" onclick="navigateTo('studentChallenge')">← Back</button>
+        <button class="btn btn-ghost" style="margin-top:14px;" onclick="goBack()">← Back</button>
       </div>
     `;
   }catch(e){
     console.error('showMyDailyAnswers failed', e);
-    app.innerHTML = `${topbar()}<div class="card"><p class="muted center-note">Couldn't load your answers. Try again.</p></div><div style="margin-top:10px;"><button class="btn btn-ghost" onclick="navigateTo('studentChallenge')">← Back</button></div>`;
+    app.innerHTML = `${topbar()}<div class="card"><p class="muted center-note">Couldn't load your answers. Try again.</p></div><div style="margin-top:10px;"><button class="btn btn-ghost" onclick="goBack()">← Back</button></div>`;
   }
 }
 
@@ -2371,7 +2407,7 @@ function renderFunZone(){
         <button class="btn btn-primary" onclick="navigateTo('emojiRiddle')">🧩 Emoji Riddle — guess the word from the sounds</button>
         <button class="btn btn-primary" onclick="navigateTo('speedTyping')">⏱️ Speed Typing — how fast can you type?</button>
         <button class="btn btn-primary" onclick="navigateTo('dailySpin')">🎁 Daily Spin — one free spin a day</button>
-        <button class="btn btn-primary" onclick="navigateTo('movieSpin')">🎬 Movie Night Spin — suggest & discover tonight's movie</button>
+        <button class="btn btn-primary" onclick="navigateTo('movieSpin')">🎬 Movie Night Spin — suggest a movie</button>
         <button class="btn btn-ghost" onclick="navigateTo('funZoneLeaderboard')">🏆 Fun Zone Leaderboard</button>
       </div>
       <button class="btn btn-ghost" style="margin-top:14px;" onclick="goBack()">← Back</button>
@@ -3342,7 +3378,7 @@ async function renderDuelPlay(){
       <div class="card">
         <p class="muted center-note">This is taking longer than expected.</p>
         <button class="btn btn-accent" style="margin-top:10px;" onclick="renderDuelPlay()">🔄 Try Again</button>
-        <button class="btn btn-ghost" style="margin-top:8px;" onclick="navigateTo('duelList')">← Back to Challenges</button>
+        <button class="btn btn-ghost" style="margin-top:8px;" onclick="goBack()">← Back to Challenges</button>
       </div>`;
   }, 8000);
 
@@ -3505,12 +3541,12 @@ async function showMyDuelAnswers(){
         <h2>📋 Your Answers</h2>
         <p class="muted" style="font-size:0.8rem;">${(myProgress||[]).length}/${keys.length} questions answered</p>
         ${rows}
-        <button class="btn btn-ghost" style="margin-top:14px;" onclick="showDuelResult(__activeDuelForResult, __activeParticipantsForResult)">← Back to Result</button>
+        <button class="btn btn-ghost" style="margin-top:14px;" onclick="goBack()">← Back to Result</button>
       </div>
     `;
   }catch(e){
     console.error('showMyDuelAnswers failed', e);
-    app.innerHTML = `${topbar()}<div class="card"><p class="muted center-note">Couldn't load your answers. Try again.</p></div><div style="margin-top:10px;"><button class="btn btn-ghost" onclick="navigateTo('duelList')">← Back</button></div>`;
+    app.innerHTML = `${topbar()}<div class="card"><p class="muted center-note">Couldn't load your answers. Try again.</p></div><div style="margin-top:10px;"><button class="btn btn-ghost" onclick="goBack()">← Back</button></div>`;
   }
 }
 
@@ -3531,7 +3567,7 @@ async function renderDuelRound(duel, participants, me){
         <div class="card">
           <p class="muted center-note">Couldn't finish wrapping up this challenge automatically.</p>
           <button class="btn btn-accent" style="margin-top:10px;" onclick="__duelEndAttempts['${duel.id}']=0; renderDuelPlay();">🔄 Try Again</button>
-          <button class="btn btn-ghost" style="margin-top:8px;" onclick="navigateTo('duelList')">← Back to Challenges</button>
+          <button class="btn btn-ghost" style="margin-top:8px;" onclick="goBack()">← Back to Challenges</button>
         </div>`;
       return;
     }
@@ -3549,7 +3585,7 @@ async function renderDuelRound(duel, participants, me){
       <div class="card">
         <p class="muted center-note">This is taking longer than expected.</p>
         <button class="btn btn-accent" style="margin-top:10px;" onclick="renderDuelPlay()">🔄 Try Again</button>
-        <button class="btn btn-ghost" style="margin-top:8px;" onclick="navigateTo('duelList')">← Back to Challenges</button>
+        <button class="btn btn-ghost" style="margin-top:8px;" onclick="goBack()">← Back to Challenges</button>
       </div>`;
   }, 8000);
 
