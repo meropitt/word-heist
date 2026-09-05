@@ -810,6 +810,17 @@ function pickRandomQuestion(usedKeys, useHard){
 const DAILY_QUESTION_LIMIT = 30;
 const DAILY_WRONG_LIMIT = 5;
 const DAILY_SKIP_LIMIT = 5;
+
+/* Best-effort fetch of today's Daily Spin bonuses for the current student
+   (extra questions unlocked via a "Bonus Round" spin, extra mistakes
+   allowed via a "+3 mistakes" spin). Defaults to zero/zero if the row
+   doesn't exist yet or the request fails — never blocks the challenge. */
+async function getDailyBonus(dateStr){
+  try{
+    const { data } = await supabaseClient.from('daily_bonuses').select('*').eq('code', state.studentCode).eq('challenge_date', dateStr).maybeSingle();
+    return { extra_questions: (data && data.extra_questions) || 0, extra_wrongs: (data && data.extra_wrongs) || 0 };
+  }catch(e){ return { extra_questions: 0, extra_wrongs: 0 }; }
+}
 const HARD_MODE_STREAK = 10;
 const POINTS_NORMAL = 15;
 const POINTS_HARD = 25;
@@ -986,6 +997,167 @@ async function renderChatRoom(){
   renderChatComposer();
   startChatKeyboardWatcher();
   state.chatPollHandle = setInterval(() => refreshChatMessages(false), 3000);
+}
+
+/* ---------------- Movie Night Spin ---------------- */
+/* Suggestions: one per student per day, locked once submitted, closes at
+   10:00 PM local time. Cleared automatically every day at 5:00 AM — but
+   the day's WINNER (once the teacher spins) is kept forever in
+   movie_spin_results so it always still shows in the spin screen. */
+function movieSuggestionsCutoffPassed(){ return new Date().getHours() >= 22; }
+
+async function maybeResetDailyMovieSuggestions(){
+  try{
+    const now = new Date();
+    const boundary = new Date(now);
+    boundary.setHours(5,0,0,0);
+    if(boundary > now) boundary.setDate(boundary.getDate() - 1);
+    const { data: meta } = await supabaseClient.from('movie_meta').select('*').eq('id',1).maybeSingle();
+    const lastReset = meta && meta.last_reset ? new Date(meta.last_reset) : new Date(0);
+    if(lastReset < boundary){
+      await supabaseClient.from('movie_suggestions').delete().neq('code','__never__');
+      await supabaseClient.from('movie_meta').upsert({ id:1, last_reset: new Date().toISOString() }, { onConflict:'id' });
+    }
+  }catch(e){ /* non-fatal — movie spin still works even if the reset check fails */ }
+}
+
+async function fetchTodayMovieSuggestions(){
+  const dateStr = todayStr();
+  const { data } = await supabaseClient.from('movie_suggestions').select('*').eq('suggestion_date', dateStr).order('created_at', { ascending:true });
+  return data || [];
+}
+
+async function fetchTodayMovieWinner(){
+  const dateStr = todayStr();
+  const { data } = await supabaseClient.from('movie_spin_results').select('*').eq('win_date', dateStr).maybeSingle();
+  return data || null;
+}
+
+async function renderMovieSpin(){
+  if(!state.studentCode){ navigateTo('roleSelect'); return; }
+  app.innerHTML = `${topbar()}<div class="card"><p class="muted center-note">Loading movie night…</p></div>`;
+  await maybeResetDailyMovieSuggestions();
+  const [suggestions, winner] = await Promise.all([fetchTodayMovieSuggestions(), fetchTodayMovieWinner()]);
+  const mine = suggestions.find(s => s.code === state.studentCode);
+  const cutoffPassed = movieSuggestionsCutoffPassed();
+
+  const winnerHtml = winner ? `
+    <div class="feedback ok" style="margin-bottom:12px;">🏆 Tonight's Movie: <strong>${escapeHtml(winner.movie_title)}</strong> (suggested by ${escapeHtml(winner.student_name||'')})</div>
+  ` : `
+    <p class="muted" style="font-size:0.82rem; margin-bottom:12px;">${cutoffPassed ? '⏳ Suggestions are closed for today — waiting for your teacher to spin!' : '🕙 Suggestions close today at 10:00 PM.'}</p>
+  `;
+
+  const formHtml = mine ? `
+    <div class="feedback ok" style="margin-bottom:10px;">🎬 Your suggestion: <strong>${escapeHtml(mine.movie_title)}</strong> (locked for today)</div>
+  ` : cutoffPassed ? `
+    <p class="muted" style="font-size:0.82rem; margin-bottom:10px;">Suggestions are closed for today. Try again tomorrow!</p>
+  ` : `
+    <div style="display:flex; gap:8px; margin-bottom:10px;">
+      <input id="movieTitleInput" type="text" maxlength="60" placeholder="Suggest a movie…" style="flex:1;" />
+      <button class="btn btn-primary" onclick="submitMovieSuggestion()">Suggest</button>
+    </div>
+    <p class="muted" style="font-size:0.75rem; margin-bottom:10px;">One suggestion per day — you can't change or delete it once sent.</p>
+  `;
+
+  const listHtml = suggestions.length ? suggestions.map(s => `
+    <div class="student-row"><span>🎬 ${escapeHtml(s.movie_title)}</span><span class="muted">${escapeHtml(s.student_name||s.code)}</span></div>
+  `).join('') : `<p class="muted">No suggestions yet today — be the first!</p>`;
+
+  app.innerHTML = `
+    ${topbar()}
+    <div class="card">
+      <span class="eyebrow">Just for Fun</span>
+      <h2>🎬 Movie Night Spin</h2>
+      ${winnerHtml}
+      ${formHtml}
+      <div class="divider"></div>
+      <p class="muted" style="font-size:0.78rem; margin-bottom:6px;">Today's suggestions:</p>
+      ${listHtml}
+      <button class="btn btn-ghost" style="margin-top:14px;" onclick="renderFunZone()">← Back to Fun Zone</button>
+    </div>
+  `;
+}
+
+async function submitMovieSuggestion(){
+  const input = document.getElementById('movieTitleInput');
+  const title = input ? input.value.trim() : '';
+  if(!title) return;
+  if(movieSuggestionsCutoffPassed()){ renderMovieSpin(); return; }
+  try{
+    const { data: existing } = await supabaseClient.from('movie_suggestions').select('code').eq('code', state.studentCode).eq('suggestion_date', todayStr()).maybeSingle();
+    if(existing){ renderMovieSpin(); return; }
+    await supabaseClient.from('movie_suggestions').insert({
+      code: state.studentCode, student_name: state.studentName, team_name: state.team ? state.team.team_name : null,
+      movie_title: title, suggestion_date: todayStr()
+    });
+  }catch(e){ console.error('submitMovieSuggestion failed', e); }
+  renderMovieSpin();
+}
+
+async function renderTeacherMovieSpin(){
+  if(!state.teacherAuthed){ navigateTo('roleSelect'); return; }
+  app.innerHTML = `${topbar()}<div class="card"><p class="muted center-note">Loading movie night…</p></div>`;
+  await maybeResetDailyMovieSuggestions();
+  const [suggestions, winner, history] = await Promise.all([
+    fetchTodayMovieSuggestions(), fetchTodayMovieWinner(),
+    supabaseClient.from('movie_spin_results').select('*').order('win_date', { ascending:false }).limit(10).then(r => r.data || [])
+  ]);
+  const cutoffPassed = movieSuggestionsCutoffPassed();
+
+  const listHtml = suggestions.length ? suggestions.map(s => `
+    <div class="student-row"><span>🎬 ${escapeHtml(s.movie_title)}</span><span class="muted">${escapeHtml(s.student_name||s.code)}</span></div>
+  `).join('') : `<p class="muted">No suggestions yet today.</p>`;
+
+  let actionHtml;
+  if(winner){
+    actionHtml = `<div class="feedback ok">🏆 Already spun today: <strong>${escapeHtml(winner.movie_title)}</strong></div><p class="muted" style="font-size:0.8rem; margin-top:6px;">Only one spin per day — come back tomorrow.</p>`;
+  } else if(!cutoffPassed){
+    actionHtml = `<p class="muted" style="font-size:0.82rem;">🕙 Suggestions are still open until 10:00 PM — you can spin once they close.</p>`;
+  } else if(!suggestions.length){
+    actionHtml = `<p class="muted" style="font-size:0.82rem;">No suggestions came in today, so there's nothing to spin.</p>`;
+  } else {
+    actionHtml = `<div id="teacherSpinWheel" style="font-size:3rem; margin:10px 0; transition: transform 2.2s cubic-bezier(.15,.85,.25,1);">🎬</div><button class="btn btn-primary" onclick="doTeacherMovieSpin()">🎯 Spin Now</button>`;
+  }
+
+  const historyHtml = history.length ? history.map(h => `
+    <div class="student-row"><span>${escapeHtml(h.win_date)}</span><span class="muted">🏆 ${escapeHtml(h.movie_title)}</span></div>
+  `).join('') : `<p class="muted" style="font-size:0.8rem;">No past winners yet.</p>`;
+
+  app.innerHTML = `
+    ${topbar()}
+    <div class="card" style="text-align:center;">
+      <span class="eyebrow">Class Fun</span>
+      <h2>🎬 Movie Spin</h2>
+      ${actionHtml}
+      <div class="divider"></div>
+      <p class="muted" style="font-size:0.78rem; margin-bottom:6px; text-align:left;">Today's suggestions (${suggestions.length}):</p>
+      <div style="text-align:left;">${listHtml}</div>
+      <div class="divider"></div>
+      <p class="muted" style="font-size:0.78rem; margin-bottom:6px; text-align:left;">Previous winners:</p>
+      <div style="text-align:left;">${historyHtml}</div>
+      <button class="btn btn-ghost" style="margin-top:14px;" onclick="navigateTo('teacherDashboard')">← Back to Dashboard</button>
+    </div>
+  `;
+}
+
+async function doTeacherMovieSpin(){
+  const suggestions = await fetchTodayMovieSuggestions();
+  if(!suggestions.length) return;
+  const wheel = document.getElementById('teacherSpinWheel');
+  const pick = suggestions[Math.floor(Math.random() * suggestions.length)];
+  if(wheel) wheel.style.transform = `rotate(${720 + Math.floor(Math.random()*360)}deg)`;
+  setTimeout(async () => {
+    try{
+      const dateStr = todayStr();
+      const { data: existing } = await supabaseClient.from('movie_spin_results').select('win_date').eq('win_date', dateStr).maybeSingle();
+      if(!existing){
+        await supabaseClient.from('movie_spin_results').insert({
+          win_date: dateStr, movie_title: pick.movie_title, student_code: pick.code, student_name: pick.student_name, spun_at: new Date().toISOString()
+        });
+      }
+    }catch(e){ console.error('doTeacherMovieSpin failed', e); }
+    renderTeacherMovieSpin();
+  }, 1600);
 }
 
 async function refreshChatMessages(forceScroll){
@@ -1287,15 +1459,28 @@ function navigateTo(screen){
   if(state.screen && state.screen !== screen) state.history.push(state.screen);
   state.screen = screen;
   persistState();
+  try{ history.pushState({ __appNav:true }, '', location.href); }catch(e){}
   render();
 }
+/* Every "Back" action — the in-app ← Back button, the browser's own back
+   button, and the phone's hardware/gesture back — must behave identically
+   and never leave a stale/duplicate screen. The in-app button simply asks
+   the browser to go back; the actual app-state change happens in ONE
+   place: the popstate handler below. This keeps the browser's history and
+   the app's screen in sync no matter which "back" the user used. */
 function goBack(){
+  try{ history.back(); }
+  catch(e){ popStateGoBack(); }
+}
+function popStateGoBack(){
   clearChatPoll();
+  clearDuelTimer();
   const prev = state.history.pop();
   state.screen = prev || 'roleSelect';
   persistState();
   render();
 }
+window.addEventListener('popstate', () => { popStateGoBack(); });
 
 function render(){
   if(!supabaseReady && state.screen !== 'roleSelect'){
@@ -1315,6 +1500,7 @@ function render(){
     duelList: renderDuelList,
     duelPlay: renderDuelPlay,
     teacherDuels: renderTeacherDuels,
+    teacherMovieSpin: renderTeacherMovieSpin,
     helpGuide: renderHelpGuide,
     chatRoom: renderChatRoom,
   };
@@ -1492,7 +1678,7 @@ function goStudentFlow(){ navigateTo('studentCodeEntry'); }
 function goTeacherLogin(){ navigateTo('teacherLogin'); }
 function goStandings(){ navigateTo('standings'); }
 function goDuels(){ navigateTo('duelList'); }
-function goRoleSelect(){ state.screen='roleSelect'; state.history=[]; persistState(); render(); }
+function goRoleSelect(){ state.screen='roleSelect'; state.history=[]; persistState(); try{ history.pushState({ __appNav:true }, '', location.href); }catch(e){} render(); }
 
 /* ---------------- Student hub (after code entry) ---------------- */
 function renderStudentHub(){
@@ -1711,6 +1897,11 @@ async function renderTeacherDashboard(){
     <div class="card" style="cursor:pointer;" onclick="navigateTo('teacherDuels')">
       <h3>⚔️ Manage Challenges</h3>
       <p class="muted" style="margin:0;">Create head-to-head duels between teams or players.</p>
+    </div>
+
+    <div class="card" style="cursor:pointer;" onclick="navigateTo('teacherMovieSpin')">
+      <h3>🎬 Movie Spin</h3>
+      <p class="muted" style="margin:0;">Review tonight's movie suggestions and spin to pick the winner (once a day, after 10 PM).</p>
     </div>
 
     <div class="card" style="cursor:pointer;" onclick="goStandings()">
@@ -1955,9 +2146,10 @@ async function renderStudentChallenge(){
   }
 
   const dateStr = challenge.challenge_date;
-  const [{ data: progressRows }, { data: skipRows }] = await Promise.all([
+  const [{ data: progressRows }, { data: skipRows }, dailyBonus] = await Promise.all([
     supabaseClient.from('team_progress').select('*').eq('code', state.studentCode).eq('challenge_date', dateStr),
-    supabaseClient.from('skip_log').select('*').eq('code', state.studentCode).eq('challenge_date', dateStr)
+    supabaseClient.from('skip_log').select('*').eq('code', state.studentCode).eq('challenge_date', dateStr),
+    getDailyBonus(todayStr())
   ]);
   const rows = progressRows || [];
   const skips = skipRows || [];
@@ -1965,6 +2157,8 @@ async function renderStudentChallenge(){
   const correctCount = rows.filter(r=>r.correct).length;
   const wrongCount = rows.filter(r=>!r.correct && !r.is_bonus).length;
   const skipsUsed = skips.length;
+  const wrongLimitToday = DAILY_WRONG_LIMIT + (dailyBonus.extra_wrongs || 0);
+  const questionLimitToday = DAILY_QUESTION_LIMIT + (dailyBonus.extra_questions || 0);
 
   const headerInfo = `
     <div style="display:flex; align-items:center; gap:10px; margin-bottom:10px;">
@@ -1973,12 +2167,12 @@ async function renderStudentChallenge(){
     </div>
   `;
 
-  if(wrongCount >= DAILY_WRONG_LIMIT){
+  if(wrongCount >= wrongLimitToday){
     app.innerHTML = `
       ${topbar()}
       <div class="card">
         ${headerInfo}
-        <div class="feedback bad">✗ You've used all ${DAILY_WRONG_LIMIT} of today's wrong answers. Come back for a new challenge tomorrow!</div>
+        <div class="feedback bad">✗ You've used all ${wrongLimitToday} of today's wrong answers${dailyBonus.extra_wrongs ? ` (${DAILY_WRONG_LIMIT} + ${dailyBonus.extra_wrongs} 🎁 from the Daily Spin)` : ''}. Come back for a new challenge tomorrow!</div>
         <p class="muted" style="margin-top:8px;">Today's result: ${correctCount} correct out of ${answeredCount} answered.</p>
         <button class="btn btn-ghost" style="margin-top:10px;" onclick="showMyDailyAnswers('${dateStr}')">📋 View My Answers</button>
         <button class="btn btn-ghost" style="margin-top:8px;" onclick="goStandings()">View Standings</button>
@@ -1987,15 +2181,15 @@ async function renderStudentChallenge(){
     return;
   }
 
-  if(answeredCount >= DAILY_QUESTION_LIMIT){
+  if(answeredCount >= questionLimitToday){
     app.innerHTML = `
       ${topbar()}
       <div class="card">
         ${headerInfo}
-        <div class="feedback ok">🎉 You finished today's ${DAILY_QUESTION_LIMIT} questions! ${correctCount}/${DAILY_QUESTION_LIMIT} correct.</div>
+        <div class="feedback ok">🎉 You finished today's ${questionLimitToday} questions! ${correctCount}/${questionLimitToday} correct.</div>
         <button class="btn btn-ghost" style="margin-top:10px;" onclick="showMyDailyAnswers('${dateStr}')">📋 View My Answers</button>
         <button class="btn btn-ghost" style="margin-top:8px;" onclick="goStandings()">View Standings</button>
-        <p class="muted" style="margin-top:10px; font-size:0.82rem;">🎉 Bored while you wait for tomorrow? Check out the <strong>Fun Zone</strong> from the main menu.</p>
+        <p class="muted" style="margin-top:10px; font-size:0.82rem;">🎉 Bored while you wait for tomorrow? Check out the <strong>Fun Zone</strong> from the main menu — you might land another Bonus Round on the Daily Spin!</p>
       </div>
     `;
     return;
@@ -2006,7 +2200,7 @@ async function renderStudentChallenge(){
   const useHard = trailingStreak >= HARD_MODE_STREAK;
   const isBonus = answeredCount === 0; // first question of the day is the Mystery Bonus
   const picked = pickRandomQuestion(usedKeys, useHard);
-  renderQuestionCard(challenge, dateStr, picked, useHard, isBonus, { answeredCount, correctCount, wrongCount, skipsUsed, trailingStreak });
+  renderQuestionCard(challenge, dateStr, picked, useHard, isBonus, { answeredCount, correctCount, wrongCount, skipsUsed, trailingStreak, wrongLimitToday, questionLimitToday });
 }
 
 function computeTrailingStreak(rows){
@@ -2108,6 +2302,7 @@ function renderFunZone(){
         <button class="btn btn-primary" onclick="renderEmojiRiddle()">🧩 Emoji Riddle — guess the word from the sounds</button>
         <button class="btn btn-primary" onclick="renderSpeedTyping()">⏱️ Speed Typing — how fast can you type?</button>
         <button class="btn btn-primary" onclick="renderDailySpin()">🎁 Daily Spin — one free spin a day</button>
+        <button class="btn btn-primary" onclick="renderMovieSpin()">🎬 Movie Night Spin — suggest & discover tonight's movie</button>
         <button class="btn btn-ghost" onclick="renderFunZoneLeaderboard()">🏆 Fun Zone Leaderboard</button>
       </div>
       <button class="btn btn-ghost" style="margin-top:14px;" onclick="navigateTo('studentHub')">← Back</button>
@@ -2186,6 +2381,12 @@ const EMOJI_RIDDLE_BANK = [
   { emojis: "🏠🔨", answer: "homework", hint: "home + work" },
   { emojis: "🧈🪰", answer: "butterfly", hint: "butter + fly" },
   { emojis: "☀️📅", answer: "sunday", hint: "sun + day" },
+  { emojis: "⭐🐟", answer: "starfish", hint: "star + fish" },
+  { emojis: "❄️🧑", answer: "snowman", hint: "snow + man" },
+  { emojis: "🌧️🎀", answer: "rainbow", hint: "rain + bow" },
+  { emojis: "🦶⚽", answer: "football", hint: "foot + ball" },
+  { emojis: "🔑⛓️", answer: "keychain", hint: "key + chain" },
+  { emojis: "🥤🎂", answer: "cupcake", hint: "cup + cake" },
 ];
 function nextEmojiRiddle(){
   const pick = EMOJI_RIDDLE_BANK[Math.floor(Math.random() * EMOJI_RIDDLE_BANK.length)];
@@ -2341,49 +2542,95 @@ function typingAccuracy(typed, target){
 }
 
 /* ---------------- Daily Spin ---------------- */
+/* 10 equally-likely slices. Real effects — not just a message:
+   - replay:   unlocks 30 more questions in today's Daily Challenge
+   - xp:       added straight to the student's XP
+   - mistakes: raises today's mistake limit (5 → 8) for the daily challenge
+   - none:     "better luck next time" (4 of the 10 slices) */
 const DAILY_SPIN_PRIZES = [
-  "🌟 Awesome job today!", "🎉 You're on fire!", "💪 Keep up the great work!",
-  "🏅 Champion energy!", "🚀 You're improving fast!", "😄 Bright smile bonus!",
-  "🍀 Lucky spin — great effort today!", "🧠 Big brain moment!", "🔥 Unstoppable today!",
-  "🎈 Have a wonderful rest of your day!"
+  { type:'replay',   icon:'🔁', label:'Bonus Round — 30 more Daily Challenge questions unlocked!' },
+  { type:'xp', amount:25,  icon:'⭐', label:'+25 XP!' },
+  { type:'xp', amount:50,  icon:'⭐', label:'+50 XP!' },
+  { type:'xp', amount:75,  icon:'⭐', label:'+75 XP!' },
+  { type:'xp', amount:100, icon:'⭐', label:'+100 XP!' },
+  { type:'mistakes', amount:3, icon:'🛡️', label:'+3 extra mistakes allowed today!' },
+  { type:'none', icon:'😅', label:'Better luck next time!' },
+  { type:'none', icon:'😅', label:'Better luck next time!' },
+  { type:'none', icon:'😅', label:'Better luck next time!' },
+  { type:'none', icon:'😅', label:'Better luck next time!' },
 ];
 function spinDateKey(){ return 'academy_spin_' + (state.studentCode || 'guest') + '_' + todayStr(); }
+function spinPrizeContentsHtml(){
+  return `
+    <div style="text-align:left; margin:10px 0 16px;">
+      <p class="muted" style="font-size:0.78rem; margin-bottom:6px;">🎡 What's in the spin:</p>
+      ${DAILY_SPIN_PRIZES.map(p => `<div class="student-row" style="padding:6px 0;"><span>${p.icon} ${escapeHtml(p.label)}</span></div>`).join('')}
+    </div>
+  `;
+}
 function renderDailySpin(){
-  const usedToday = localStorage.getItem(spinDateKey());
+  let usedToday = null;
+  try{ const raw = localStorage.getItem(spinDateKey()); usedToday = raw ? JSON.parse(raw) : null; }catch(e){ usedToday = null; }
   app.innerHTML = `
     ${topbar()}
     <div class="card" style="text-align:center;">
       <span class="eyebrow">Just for Fun</span>
       <h2>🎁 Daily Spin</h2>
-      <p class="muted">One free spin per day — just for a little fun!</p>
+      <p class="muted">One free spin per day — always a random prize!</p>
       <div id="spinWheel" style="font-size:3.4rem; margin:18px 0; transition: transform 2.2s cubic-bezier(.15,.85,.25,1);">🎡</div>
       <div id="spinResult"></div>
       ${usedToday
-        ? `<div class="feedback ok">${escapeHtml(usedToday)}</div><p class="muted" style="font-size:0.8rem; margin-top:6px;">Come back tomorrow for another spin!</p>`
-        : `<button class="btn btn-primary" onclick="doDailySpin()">🎯 Spin Now</button>`}
-      <button class="btn btn-ghost" style="margin-top:14px;" onclick="renderFunZone()">← Back to Fun Zone</button>
+        ? `<div class="feedback ok">${usedToday.icon} ${escapeHtml(usedToday.label)}</div><p class="muted" style="font-size:0.8rem; margin-top:6px;">Come back tomorrow for another spin!</p>`
+        : `<button class="btn btn-primary" onclick="doDailySpin(event)">🎯 Spin Now</button>`}
+      ${spinPrizeContentsHtml()}
+      <button class="btn btn-ghost" style="margin-top:4px;" onclick="renderFunZone()">← Back to Fun Zone</button>
     </div>
   `;
 }
-function doDailySpin(){
+function doDailySpin(ev){
   const wheel = document.getElementById('spinWheel');
+  const btn = ev && ev.target;
+  if(btn) btn.disabled = true;
   const prize = DAILY_SPIN_PRIZES[Math.floor(Math.random() * DAILY_SPIN_PRIZES.length)];
   if(wheel) wheel.style.transform = `rotate(${720 + Math.floor(Math.random()*360)}deg)`;
-  setTimeout(() => {
-    try{ localStorage.setItem(spinDateKey(), prize); }catch(e){}
+  setTimeout(async () => {
+    try{ localStorage.setItem(spinDateKey(), JSON.stringify(prize)); }catch(e){}
+    await applyDailySpinPrize(prize);
     renderDailySpin();
   }, 1600);
 }
+async function applyDailySpinPrize(prize){
+  if(!state.studentCode) return;
+  try{
+    if(prize.type === 'xp'){
+      const { data: codeRow } = await supabaseClient.from('student_codes').select('*').eq('code', state.studentCode).maybeSingle();
+      if(codeRow){
+        const newXP = (codeRow.xp_points || 0) + prize.amount;
+        await supabaseClient.from('student_codes').update({ xp_points: newXP }).eq('code', state.studentCode);
+        state.studentXP = newXP;
+      }
+    } else if(prize.type === 'replay' || prize.type === 'mistakes'){
+      const dateStr = todayStr();
+      const { data: existing } = await supabaseClient.from('daily_bonuses').select('*').eq('code', state.studentCode).eq('challenge_date', dateStr).maybeSingle();
+      const row = existing || { code: state.studentCode, challenge_date: dateStr, extra_questions: 0, extra_wrongs: 0 };
+      if(prize.type === 'replay') row.extra_questions = (row.extra_questions || 0) + DAILY_QUESTION_LIMIT;
+      if(prize.type === 'mistakes') row.extra_wrongs = (row.extra_wrongs || 0) + prize.amount;
+      await supabaseClient.from('daily_bonuses').upsert(row, { onConflict: 'code,challenge_date' });
+    }
+  }catch(e){ console.error('applyDailySpinPrize failed', e); }
+}
 
 function statsBar(stats, useHard, isBonus){
+  const questionLimitToday = stats.questionLimitToday || DAILY_QUESTION_LIMIT;
+  const wrongLimitToday = stats.wrongLimitToday || DAILY_WRONG_LIMIT;
   const skipsLeft = DAILY_SKIP_LIMIT - stats.skipsUsed;
-  const danger = stats.wrongCount >= 4;
+  const danger = stats.wrongCount >= wrongLimitToday - 1;
   const fire = fireEmoji(stats.trailingStreak);
   const toHard = Math.max(0, HARD_MODE_STREAK - stats.trailingStreak);
   return `
     <div style="display:flex; justify-content:space-between; align-items:center; font-family: var(--font-body); color: var(--muted); font-size:0.8rem; margin-bottom:6px;">
-      <span>Question ${stats.answeredCount+1}/${DAILY_QUESTION_LIMIT} ${fire ? '<span style="font-size:1rem;">'+fire+'</span>' : ''}</span>
-      <span style="${danger ? 'color:var(--bad); font-weight:800; animation: pulseDanger 1s infinite;' : ''}">❌ ${stats.wrongCount}/${DAILY_WRONG_LIMIT} &nbsp;·&nbsp; ⏭ ${skipsLeft} left</span>
+      <span>Question ${stats.answeredCount+1}/${questionLimitToday} ${fire ? '<span style="font-size:1rem;">'+fire+'</span>' : ''}</span>
+      <span style="${danger ? 'color:var(--bad); font-weight:800; animation: pulseDanger 1s infinite;' : ''}">❌ ${stats.wrongCount}/${wrongLimitToday} &nbsp;·&nbsp; ⏭ ${skipsLeft} left</span>
     </div>
     ${danger ? `<div class="feedback bad" style="margin-bottom:8px;">⚠ One more mistake and today's challenge locks!</div>` : ''}
     ${isBonus ? `<div class="status-pill" style="background:#fef9c3; color:#854d0e; margin-bottom:8px; border:1px solid #eab308;">🎁 Mystery Bonus — double points, no penalty if wrong!</div>` : ''}
@@ -2980,18 +3227,42 @@ async function renderDuelList(){
 }
 
 /* ---- Waiting room: wait until everyone required has joined ---- */
+/* Bumped every time renderDuelPlay is (re)entered. Lets a stale watchdog
+   timer recognize it's no longer relevant (the user moved on, or a newer
+   call already finished) instead of clobbering whatever is on screen. */
+let __duelLoadToken = 0;
+
 async function renderDuelPlay(){
   const duelId = state.currentDuelId;
   if(!duelId || !state.studentCode){ navigateTo('duelList'); return; }
   clearDuelTimer();
+  const myToken = ++__duelLoadToken;
   app.innerHTML = `${topbar()}<div class="card"><p class="muted center-note">Loading challenge…</p></div>`;
+
+  // Safety net: no matter what goes wrong (a slow network, a permissions
+  // hiccup on the database, anything) this screen must NEVER sit on
+  // "Loading challenge…" forever. If we're still stuck after 8s, replace
+  // it with a manual retry — the user is always unstuck within 8 seconds.
+  const watchdog = setTimeout(() => {
+    if(myToken !== __duelLoadToken) return;
+    app.innerHTML = `
+      ${topbar()}
+      <div class="card">
+        <p class="muted center-note">This is taking longer than expected.</p>
+        <button class="btn btn-accent" style="margin-top:10px;" onclick="renderDuelPlay()">🔄 Try Again</button>
+        <button class="btn btn-ghost" style="margin-top:8px;" onclick="navigateTo('duelList')">← Back to Challenges</button>
+      </div>`;
+  }, 8000);
 
   try{
     const { data: duel } = await supabaseClient.from('duels').select('*').eq('id', duelId).maybeSingle();
-    if(!duel){ navigateTo('duelList'); return; }
+    if(myToken !== __duelLoadToken) return;
+    if(!duel){ clearTimeout(watchdog); navigateTo('duelList'); return; }
     const { data: participants } = await supabaseClient.from('duel_participants').select('*').eq('duel_id', duelId);
+    if(myToken !== __duelLoadToken) return;
     const me = (participants||[]).find(p => p.participant_code === state.studentCode);
-    if(!me){ navigateTo('duelList'); return; }
+    if(!me){ clearTimeout(watchdog); navigateTo('duelList'); return; }
+    clearTimeout(watchdog); // we have real data now — everything past this point renders something concrete
 
     if(duel.status === 'ended'){
       await showDuelResult(duel, participants);
@@ -3005,23 +3276,27 @@ async function renderDuelPlay(){
       }
       const allJoined = (participants||[]).every(p => p.joined || p.participant_code === state.studentCode);
       if(allJoined){
-        // Try to start the duel (harmless if another client also does this).
-        await supabaseClient.from('duels').update({ status:'active', current_round:0, round_started_at: new Date().toISOString() }).eq('id', duelId);
-        renderDuelPlay();
-        return;
+        // Try to start the duel (harmless if another client also does this;
+        // best-effort only — never trust it to have taken effect. We fall
+        // through to the normal waiting/poll UI below instead of recursing
+        // immediately, so a failed/slow update can never cause a tight loop
+        // that leaves the screen stuck — the next 2s poll will pick it up.
+        try{ await supabaseClient.from('duels').update({ status:'active', current_round:0, round_started_at: new Date().toISOString() }).eq('id', duelId); }
+        catch(e){ console.error('duel start update failed', e); }
       }
       const joinedCount = (participants||[]).filter(p=>p.joined).length + (me.joined?0:1);
       app.innerHTML = `
         ${topbar()}
         <div class="card">
           <span class="eyebrow">⚔️ ${escapeHtml(duel.name)}</span>
-          <h2>Waiting for opponents…</h2>
+          <h2>${allJoined ? 'Starting…' : 'Waiting for opponents…'}</h2>
           <p class="muted">${joinedCount}/${(participants||[]).length} players have joined. Everyone must be here before the challenge starts.</p>
           <div id="waitList"></div>
         </div>
       `;
       const listDiv = document.getElementById('waitList');
       const codeToName = await fetchCodeToName();
+      if(myToken !== __duelLoadToken) return;
       (participants||[]).forEach(p => {
         const joined = p.joined || p.participant_code === state.studentCode;
         const row = document.createElement('div');
@@ -3036,8 +3311,15 @@ async function renderDuelPlay(){
     // duel.status === 'active'
     await renderDuelRound(duel, participants, me);
   }catch(e){
+    if(myToken !== __duelLoadToken) return;
+    clearTimeout(watchdog);
     console.error('renderDuelPlay failed, retrying…', e);
-    app.innerHTML = `${topbar()}<div class="card"><p class="muted center-note">Connection hiccup — retrying…</p></div>`;
+    app.innerHTML = `
+      ${topbar()}
+      <div class="card">
+        <p class="muted center-note">Connection hiccup — retrying…</p>
+        <button class="btn btn-ghost" style="margin-top:10px;" onclick="renderDuelPlay()">🔄 Try Again Now</button>
+      </div>`;
     state.duelPollHandle = setTimeout(() => renderDuelPlay(), 1500);
   }
 }
@@ -3140,15 +3422,44 @@ async function showMyDuelAnswers(){
   }
 }
 
+const __duelEndAttempts = {};
 async function renderDuelRound(duel, participants, me){
   const keys = duel.question_keys.split(',');
   const roundIndex = duel.current_round;
 
   if(roundIndex >= keys.length){
+    __duelEndAttempts[duel.id] = (__duelEndAttempts[duel.id] || 0) + 1;
+    if(__duelEndAttempts[duel.id] > 3){
+      // Something is preventing the duel from being marked ended (e.g. a
+      // permissions issue on the database) — stop auto-retrying so we
+      // never end up flickering on "Loading…" forever, and let the user
+      // (or the teacher, from Manage Challenges) end it manually instead.
+      app.innerHTML = `
+        ${topbar()}
+        <div class="card">
+          <p class="muted center-note">Couldn't finish wrapping up this challenge automatically.</p>
+          <button class="btn btn-accent" style="margin-top:10px;" onclick="__duelEndAttempts['${duel.id}']=0; renderDuelPlay();">🔄 Try Again</button>
+          <button class="btn btn-ghost" style="margin-top:8px;" onclick="navigateTo('duelList')">← Back to Challenges</button>
+        </div>`;
+      return;
+    }
     await autoEndDuelIfNeeded(duel);
     await renderDuelPlay();
     return;
   }
+  __duelEndAttempts[duel.id] = 0;
+
+  const myToken = ++__duelLoadToken;
+  const roundWatchdog = setTimeout(() => {
+    if(myToken !== __duelLoadToken) return;
+    app.innerHTML = `
+      ${topbar()}
+      <div class="card">
+        <p class="muted center-note">This is taking longer than expected.</p>
+        <button class="btn btn-accent" style="margin-top:10px;" onclick="renderDuelPlay()">🔄 Try Again</button>
+        <button class="btn btn-ghost" style="margin-top:8px;" onclick="navigateTo('duelList')">← Back to Challenges</button>
+      </div>`;
+  }, 8000);
 
   try{
     const [{ data: roundProgress }, { data: myDisables }, { data: allDisables }] = await Promise.all([
@@ -3156,6 +3467,8 @@ async function renderDuelRound(duel, participants, me){
       supabaseClient.from('duel_disables').select('*').eq('duel_id', duel.id).eq('target_code', state.studentCode),
       supabaseClient.from('duel_disables').select('*').eq('duel_id', duel.id)
     ]);
+    if(myToken !== __duelLoadToken) return;
+    clearTimeout(roundWatchdog);
     const activeDisable = (myDisables||[]).find(d => d.disabled_until_index > roundIndex);
     const myAnswer = (roundProgress||[]).find(r => r.participant_code === state.studentCode);
 
@@ -3215,8 +3528,15 @@ async function renderDuelRound(duel, participants, me){
 
     renderDuelQuestionInteractive(duel, participants, me, roundIndex, picked, header, remainingSec);
   }catch(e){
+    if(myToken !== __duelLoadToken) return;
+    clearTimeout(roundWatchdog);
     console.error('renderDuelRound failed, retrying…', e);
-    app.innerHTML = `${topbar()}<div class="card"><p class="muted center-note">Connection hiccup — retrying…</p></div>`;
+    app.innerHTML = `
+      ${topbar()}
+      <div class="card">
+        <p class="muted center-note">Connection hiccup — retrying…</p>
+        <button class="btn btn-ghost" style="margin-top:10px;" onclick="renderDuelPlay()">🔄 Try Again Now</button>
+      </div>`;
     clearDuelTimer();
     state.duelPollHandle = setTimeout(() => renderDuelPlay(), 1500);
   }
@@ -3736,10 +4056,11 @@ async function endDuelManually(duelId, scores){
 /* ============================================================
    BOOT — restore where the user left off on refresh
    ============================================================ */
-const TEACHER_ZONE_SCREENS = ['teacherDashboard','teacherDuels','standings','helpGuide','chatRoom'];
+const TEACHER_ZONE_SCREENS = ['teacherDashboard','teacherDuels','teacherMovieSpin','standings','helpGuide','chatRoom'];
 const STUDENT_ZONE_SCREENS = ['studentHub','studentChallenge','standings','duelCodeEntry','duelList','duelPlay','helpGuide','chatRoom'];
 
 async function boot(){
+  try{ history.replaceState({ __appNav:true }, '', location.href); }catch(e){}
   const saved = loadPersistedState();
   state.history = [];
   if(saved){
