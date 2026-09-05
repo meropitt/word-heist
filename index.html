@@ -1035,15 +1035,13 @@ async function maybeResetDailyMovieSuggestions(){
 
 async function fetchTodayMovieSuggestions(){
   const dateStr = todayStr();
-  const { data, error } = await supabaseClient.from('movie_suggestions').select('*').eq('suggestion_date', dateStr).order('created_at', { ascending:true });
-  if(error) throw error;
+  const { data } = await supabaseClient.from('movie_suggestions').select('*').eq('suggestion_date', dateStr).order('created_at', { ascending:true });
   return data || [];
 }
 
 async function fetchTodayMovieWinner(){
   const dateStr = todayStr();
-  const { data, error } = await supabaseClient.from('movie_spin_results').select('*').eq('win_date', dateStr).maybeSingle();
-  if(error) throw error;
+  const { data } = await supabaseClient.from('movie_spin_results').select('*').eq('win_date', dateStr).maybeSingle();
   return data || null;
 }
 
@@ -1051,19 +1049,7 @@ async function renderMovieSpin(){
   if(!state.studentCode){ navigateTo('roleSelect'); return; }
   app.innerHTML = `${topbar()}<div class="card"><p class="muted center-note">Loading movie night…</p></div>`;
   await maybeResetDailyMovieSuggestions();
-  let suggestions, winner;
-  try{
-    [suggestions, winner] = await Promise.all([fetchTodayMovieSuggestions(), fetchTodayMovieWinner()]);
-  }catch(e){
-    console.error('renderMovieSpin failed', e);
-    app.innerHTML = `
-      ${topbar()}
-      <div class="card">
-        <div class="feedback bad">✗ Movie Spin isn't set up yet — ask your teacher to run the setup SQL for it.</div>
-        <button class="btn btn-primary" style="margin-top:10px;" onclick="renderMovieSpin()">🔄 Try Again</button>
-      </div>`;
-    return;
-  }
+  const [suggestions, winner] = await Promise.all([fetchTodayMovieSuggestions(), fetchTodayMovieWinner()]);
   const mine = suggestions.find(s => s.code === state.studentCode);
   const cutoffPassed = movieSuggestionsCutoffPassed();
 
@@ -1109,27 +1095,15 @@ async function submitMovieSuggestion(){
   const title = input ? input.value.trim() : '';
   if(!title) return;
   if(movieSuggestionsCutoffPassed()){ renderMovieSpin(); return; }
-  const btn = event && event.target;
-  if(btn) btn.disabled = true;
   try{
-    const { data: existing, error: selErr } = await supabaseClient.from('movie_suggestions').select('code').eq('code', state.studentCode).eq('suggestion_date', todayStr()).maybeSingle();
-    if(selErr) throw selErr;
+    const { data: existing } = await supabaseClient.from('movie_suggestions').select('code').eq('code', state.studentCode).eq('suggestion_date', todayStr()).maybeSingle();
     if(existing){ renderMovieSpin(); return; }
-    const { error: insErr } = await supabaseClient.from('movie_suggestions').insert({
+    await supabaseClient.from('movie_suggestions').insert({
       code: state.studentCode, student_name: state.studentName, team_name: state.team ? state.team.team_name : null,
       movie_title: title, suggestion_date: todayStr()
     });
-    if(insErr) throw insErr;
-    renderMovieSpin();
-  }catch(e){
-    console.error('submitMovieSuggestion failed', e);
-    app.innerHTML = `
-      ${topbar()}
-      <div class="card">
-        <div class="feedback bad">✗ Couldn't save your suggestion. This usually means the Movie Spin database tables haven't been set up yet — ask your teacher to run the setup SQL.</div>
-        <button class="btn btn-primary" style="margin-top:10px;" onclick="renderMovieSpin()">🔄 Try Again</button>
-      </div>`;
-  }
+  }catch(e){ console.error('submitMovieSuggestion failed', e); }
+  renderMovieSpin();
 }
 
 async function renderTeacherMovieSpin(){
@@ -1519,10 +1493,7 @@ function popStateGoBack(){
   persistState();
   render();
 }
-window.addEventListener('popstate', () => {
-  try{ history.pushState({ __appNav:true }, '', location.href); }catch(e){}
-  popStateGoBack();
-});
+window.addEventListener('popstate', () => { popStateGoBack(); });
 
 function render(){
   if(!supabaseReady && state.screen !== 'roleSelect'){
