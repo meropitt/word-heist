@@ -1519,7 +1519,10 @@ function popStateGoBack(){
   persistState();
   render();
 }
-window.addEventListener('popstate', () => { popStateGoBack(); });
+window.addEventListener('popstate', () => {
+  try{ history.pushState({ __appNav:true }, '', location.href); }catch(e){}
+  popStateGoBack();
+});
 
 function render(){
   if(!supabaseReady && state.screen !== 'roleSelect'){
