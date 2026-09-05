@@ -366,6 +366,18 @@
     box-shadow: 0 0 0 3px var(--accent-dim);
   }
   .chat-input-row textarea::placeholder{ color: var(--muted); }
+  .pill-input-row{ display:flex; gap:9px; align-items:center; }
+  .pill-input-row input[type=text]{
+    flex:1 1 auto; min-width:0; width:auto; margin-bottom:0;
+    padding: 12px 16px; border-radius: 22px; border: 1.5px solid var(--line);
+    background: var(--paper); font-family: var(--font-body); font-size: 0.94rem;
+  }
+  .pill-input-row input[type=text]:focus{
+    outline:none; border-color: var(--accent); background:#fff;
+    box-shadow: 0 0 0 3px var(--accent-dim);
+  }
+  .pill-input-row input[type=text]::placeholder{ color: var(--muted); }
+  .pill-input-row .btn{ flex:0 0 auto; width:auto; white-space:nowrap; border-radius:22px; padding:12px 20px; }
   .chat-send-btn{
     flex-shrink:0; width:44px; height:44px; border-radius:50%; border:none;
     background: linear-gradient(150deg, var(--accent), #4f46e5);
@@ -1023,13 +1035,15 @@ async function maybeResetDailyMovieSuggestions(){
 
 async function fetchTodayMovieSuggestions(){
   const dateStr = todayStr();
-  const { data } = await supabaseClient.from('movie_suggestions').select('*').eq('suggestion_date', dateStr).order('created_at', { ascending:true });
+  const { data, error } = await supabaseClient.from('movie_suggestions').select('*').eq('suggestion_date', dateStr).order('created_at', { ascending:true });
+  if(error) throw error;
   return data || [];
 }
 
 async function fetchTodayMovieWinner(){
   const dateStr = todayStr();
-  const { data } = await supabaseClient.from('movie_spin_results').select('*').eq('win_date', dateStr).maybeSingle();
+  const { data, error } = await supabaseClient.from('movie_spin_results').select('*').eq('win_date', dateStr).maybeSingle();
+  if(error) throw error;
   return data || null;
 }
 
@@ -1037,7 +1051,19 @@ async function renderMovieSpin(){
   if(!state.studentCode){ navigateTo('roleSelect'); return; }
   app.innerHTML = `${topbar()}<div class="card"><p class="muted center-note">Loading movie night…</p></div>`;
   await maybeResetDailyMovieSuggestions();
-  const [suggestions, winner] = await Promise.all([fetchTodayMovieSuggestions(), fetchTodayMovieWinner()]);
+  let suggestions, winner;
+  try{
+    [suggestions, winner] = await Promise.all([fetchTodayMovieSuggestions(), fetchTodayMovieWinner()]);
+  }catch(e){
+    console.error('renderMovieSpin failed', e);
+    app.innerHTML = `
+      ${topbar()}
+      <div class="card">
+        <div class="feedback bad">✗ Movie Spin isn't set up yet — ask your teacher to run the setup SQL for it.</div>
+        <button class="btn btn-primary" style="margin-top:10px;" onclick="renderMovieSpin()">🔄 Try Again</button>
+      </div>`;
+    return;
+  }
   const mine = suggestions.find(s => s.code === state.studentCode);
   const cutoffPassed = movieSuggestionsCutoffPassed();
 
@@ -1052,8 +1078,8 @@ async function renderMovieSpin(){
   ` : cutoffPassed ? `
     <p class="muted" style="font-size:0.82rem; margin-bottom:10px;">Suggestions are closed for today. Try again tomorrow!</p>
   ` : `
-    <div style="display:flex; gap:8px; margin-bottom:10px;">
-      <input id="movieTitleInput" type="text" maxlength="60" placeholder="Suggest a movie…" style="flex:1;" />
+    <div class="pill-input-row" style="margin-bottom:10px;">
+      <input id="movieTitleInput" type="text" maxlength="60" placeholder="Suggest a movie…" onkeydown="if(event.key==='Enter'){ submitMovieSuggestion(); }" />
       <button class="btn btn-primary" onclick="submitMovieSuggestion()">Suggest</button>
     </div>
     <p class="muted" style="font-size:0.75rem; margin-bottom:10px;">One suggestion per day — you can't change or delete it once sent.</p>
@@ -1083,15 +1109,27 @@ async function submitMovieSuggestion(){
   const title = input ? input.value.trim() : '';
   if(!title) return;
   if(movieSuggestionsCutoffPassed()){ renderMovieSpin(); return; }
+  const btn = event && event.target;
+  if(btn) btn.disabled = true;
   try{
-    const { data: existing } = await supabaseClient.from('movie_suggestions').select('code').eq('code', state.studentCode).eq('suggestion_date', todayStr()).maybeSingle();
+    const { data: existing, error: selErr } = await supabaseClient.from('movie_suggestions').select('code').eq('code', state.studentCode).eq('suggestion_date', todayStr()).maybeSingle();
+    if(selErr) throw selErr;
     if(existing){ renderMovieSpin(); return; }
-    await supabaseClient.from('movie_suggestions').insert({
+    const { error: insErr } = await supabaseClient.from('movie_suggestions').insert({
       code: state.studentCode, student_name: state.studentName, team_name: state.team ? state.team.team_name : null,
       movie_title: title, suggestion_date: todayStr()
     });
-  }catch(e){ console.error('submitMovieSuggestion failed', e); }
-  renderMovieSpin();
+    if(insErr) throw insErr;
+    renderMovieSpin();
+  }catch(e){
+    console.error('submitMovieSuggestion failed', e);
+    app.innerHTML = `
+      ${topbar()}
+      <div class="card">
+        <div class="feedback bad">✗ Couldn't save your suggestion. This usually means the Movie Spin database tables haven't been set up yet — ask your teacher to run the setup SQL.</div>
+        <button class="btn btn-primary" style="margin-top:10px;" onclick="renderMovieSpin()">🔄 Try Again</button>
+      </div>`;
+  }
 }
 
 async function renderTeacherMovieSpin(){
@@ -1481,7 +1519,10 @@ function popStateGoBack(){
   persistState();
   render();
 }
-window.addEventListener('popstate', () => { popStateGoBack(); });
+window.addEventListener('popstate', () => {
+  try{ history.pushState({ __appNav:true }, '', location.href); }catch(e){}
+  popStateGoBack();
+});
 
 function render(){
   if(!supabaseReady && state.screen !== 'roleSelect'){
