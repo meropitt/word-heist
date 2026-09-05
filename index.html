@@ -1060,6 +1060,7 @@ async function renderMovieSpin(){
       ${topbar()}
       <div class="card">
         <div class="feedback bad">✗ Movie Spin isn't set up yet — ask your teacher to run the setup SQL for it.</div>
+        <p class="muted" style="font-size:0.72rem; margin-top:8px; word-break:break-word;">${escapeHtml(String(e && e.message || e))}</p>
         <button class="btn btn-primary" style="margin-top:10px;" onclick="renderMovieSpin()">🔄 Try Again</button>
       </div>`;
     return;
@@ -1127,6 +1128,7 @@ async function submitMovieSuggestion(){
       ${topbar()}
       <div class="card">
         <div class="feedback bad">✗ Couldn't save your suggestion. This usually means the Movie Spin database tables haven't been set up yet — ask your teacher to run the setup SQL.</div>
+        <p class="muted" style="font-size:0.72rem; margin-top:8px; word-break:break-word;">${escapeHtml(String(e && e.message || e))}</p>
         <button class="btn btn-primary" style="margin-top:10px;" onclick="renderMovieSpin()">🔄 Try Again</button>
       </div>`;
   }
@@ -1136,10 +1138,24 @@ async function renderTeacherMovieSpin(){
   if(!state.teacherAuthed){ navigateTo('roleSelect'); return; }
   app.innerHTML = `${topbar()}<div class="card"><p class="muted center-note">Loading movie night…</p></div>`;
   await maybeResetDailyMovieSuggestions();
-  const [suggestions, winner, historyData] = await Promise.all([
-    fetchTodayMovieSuggestions(), fetchTodayMovieWinner(),
-    supabaseClient.from('movie_spin_results').select('*').order('win_date', { ascending:false }).limit(10)
-  ]);
+  let suggestions, winner, historyData;
+  try{
+    [suggestions, winner, historyData] = await Promise.all([
+      fetchTodayMovieSuggestions(), fetchTodayMovieWinner(),
+      supabaseClient.from('movie_spin_results').select('*').order('win_date', { ascending:false }).limit(10)
+    ]);
+    if(historyData.error) throw historyData.error;
+  }catch(e){
+    console.error('renderTeacherMovieSpin failed', e);
+    app.innerHTML = `
+      ${topbar()}
+      <div class="card">
+        <div class="feedback bad">✗ Movie Spin isn't set up yet — run the setup SQL for it.</div>
+        <p class="muted" style="font-size:0.72rem; margin-top:8px; word-break:break-word;">${escapeHtml(String(e && e.message || e))}</p>
+        <button class="btn btn-primary" style="margin-top:10px;" onclick="renderTeacherMovieSpin()">🔄 Try Again</button>
+      </div>`;
+    return;
+  }
   const history = historyData.data || [];
   const cutoffPassed = movieSuggestionsCutoffPassed();
 
@@ -2656,12 +2672,30 @@ async function applyDailySpinPrize(prize){
   if(!state.studentCode) return;
   try{
     if(prize.type === 'xp'){
+      const dateStr = todayStr();
+      // Award it like a real correct answer, but WITHOUT inserting a
+      // team_progress row (that would incorrectly eat one of today's 30
+      // question slots). Team score + XP update directly; the bonus_points
+      // ledger in daily_bonuses is what the leaderboard adds on top of a
+      // student's real answered-question points.
+      if(state.team){
+        const { data: teamRow } = await supabaseClient.from('teams').select('*').eq('team_name', state.team.team_name).maybeSingle();
+        if(teamRow){
+          const newScore = teamRow.total_score + prize.amount;
+          await supabaseClient.from('teams').update({ total_score: newScore }).eq('team_name', state.team.team_name);
+          state.team.total_score = newScore;
+        }
+      }
       const { data: codeRow } = await supabaseClient.from('student_codes').select('*').eq('code', state.studentCode).maybeSingle();
       if(codeRow){
         const newXP = (codeRow.xp_points || 0) + prize.amount;
         await supabaseClient.from('student_codes').update({ xp_points: newXP }).eq('code', state.studentCode);
         state.studentXP = newXP;
       }
+      const { data: existing } = await supabaseClient.from('daily_bonuses').select('*').eq('code', state.studentCode).eq('challenge_date', dateStr).maybeSingle();
+      const row = existing || { code: state.studentCode, challenge_date: dateStr, extra_questions: 0, extra_wrongs: 0, bonus_points: 0 };
+      row.bonus_points = (row.bonus_points || 0) + prize.amount;
+      await supabaseClient.from('daily_bonuses').upsert(row, { onConflict: 'code,challenge_date' });
     } else if(prize.type === 'replay' || prize.type === 'mistakes'){
       const dateStr = todayStr();
       const { data: existing } = await supabaseClient.from('daily_bonuses').select('*').eq('code', state.studentCode).eq('challenge_date', dateStr).maybeSingle();
@@ -3120,15 +3154,20 @@ async function renderStandings(){
     return;
   }
 
-  // Student leaderboard: aggregate real points earned from team_progress
-  const [{ data: progress }, { data: students }, { data: teamsForColor }] = await Promise.all([
+  // Student leaderboard: aggregate real points earned from team_progress, plus
+  // any lifetime Daily Spin XP-prize bonus points (kept in daily_bonuses).
+  const [{ data: progress }, { data: students }, { data: teamsForColor }, { data: bonusRows }] = await Promise.all([
     supabaseClient.from('team_progress').select('*'),
     supabaseClient.from('student_codes').select('*'),
-    supabaseClient.from('teams').select('*')
+    supabaseClient.from('teams').select('*'),
+    supabaseClient.from('daily_bonuses').select('code,bonus_points')
   ]);
   const pointsByCode = {};
   (progress || []).forEach(p => {
     pointsByCode[p.code] = (pointsByCode[p.code] || 0) + (p.points || 0);
+  });
+  (bonusRows || []).forEach(b => {
+    if(b.bonus_points) pointsByCode[b.code] = (pointsByCode[b.code] || 0) + b.bonus_points;
   });
   const teamColorByName = {};
   (teamsForColor || []).forEach(t => { teamColorByName[t.team_name] = t.color; });
