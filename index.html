@@ -328,7 +328,7 @@
   }
   .chat-react-picker span{ cursor:pointer; font-size:1.05rem; }
   .chat-composer-fixed{
-    position: fixed; left:0; right:0; bottom:0; z-index:500;
+    position: fixed; left:0; right:0; bottom:60px; z-index:450;
     background: rgba(255,255,255,0.92); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
     border-top: 1px solid var(--line);
     box-shadow: 0 -6px 20px rgba(16,24,38,0.06);
@@ -389,6 +389,26 @@
   .chat-send-btn:active{ transform: scale(0.92); }
   .chat-send-btn:disabled{ opacity:0.45; box-shadow:none; cursor:default; transform:none; }
   .chat-footnote{ text-align:center; font-size:0.68rem; color:var(--muted); margin-top:6px; }
+
+  /* ---------------- Bottom Tab Bar (student navigation) ---------------- */
+  .bottom-nav{
+    position:fixed; left:0; right:0; bottom:0; z-index:400;
+    display:flex; justify-content:space-around; align-items:stretch;
+    background: rgba(255,255,255,0.97); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+    border-top:1px solid var(--line); box-shadow: 0 -4px 14px rgba(16,24,38,0.05);
+    padding: 5px 2px calc(4px + env(safe-area-inset-bottom));
+    max-width:560px; margin:0 auto;
+  }
+  .bottom-nav-item{
+    flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:2px;
+    background:none; border:none; cursor:pointer; color:var(--muted);
+    padding:5px 1px; border-radius:10px; min-width:0; -webkit-tap-highlight-color:transparent;
+  }
+  .bottom-nav-item .bn-icon{ font-size:1.15rem; line-height:1; }
+  .bottom-nav-item .bn-label{ font-size:0.58rem; font-weight:700; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:100%; margin-top:1px; }
+  .bottom-nav-item.active{ color:var(--accent); }
+  .bottom-nav-item.active .bn-icon{ transform:scale(1.12); }
+  body.has-bottom-nav{ padding-bottom:70px; }
 </style>
 </head>
 <body>
@@ -1423,17 +1443,22 @@ function resizeChatSpacer(){
   const wrap = document.getElementById('chatComposerWrap');
   const spacer = document.getElementById('chatBottomSpacer');
   if(!wrap || !spacer) return;
-  spacer.style.height = (wrap.offsetHeight + 12) + 'px';
+  const navEl = document.querySelector('.bottom-nav');
+  const navHeight = navEl ? navEl.offsetHeight : 0;
+  spacer.style.height = (wrap.offsetHeight + navHeight + 12) + 'px';
 }
 
 /* Keep the fixed composer pinned just above the on-screen keyboard (using the VisualViewport API),
-   and back at the bottom edge once the keyboard closes. */
+   or resting just above the bottom tab bar once the keyboard closes. */
 function adjustChatComposerForKeyboard(){
   const wrap = document.getElementById('chatComposerWrap');
-  if(!wrap || !window.visualViewport) return;
+  if(!wrap) return;
+  const navEl = document.querySelector('.bottom-nav');
+  const navHeight = navEl ? navEl.offsetHeight : 0;
+  if(!window.visualViewport){ wrap.style.bottom = navHeight + 'px'; resizeChatSpacer(); return; }
   const vv = window.visualViewport;
   const keyboardInset = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
-  wrap.style.bottom = keyboardInset + 'px';
+  wrap.style.bottom = (keyboardInset > 20 ? keyboardInset : navHeight) + 'px';
   resizeChatSpacer();
 }
 function startChatKeyboardWatcher(){
@@ -1536,44 +1561,31 @@ function clearChatPoll(){
 }
 function navigateTo(screen){
   clearChatPoll();
-  if(state.screen && state.screen !== screen) state.history.push(state.screen);
   state.screen = screen;
   persistState();
-  try{ history.pushState({ __appNav:true }, '', location.href); }catch(e){}
+  try{ history.pushState({ __appNav:true, screen }, '', location.href); }catch(e){}
   render();
 }
-/* Every "Back" action — the in-app ← Back button, the browser's own back
-   button, and the phone's hardware/gesture back — must behave identically
-   and predictably: they always return to the main menu (Student Hub /
-   Teacher Dashboard). Pressing Back from the main menu itself logs out
-   to the role-select (login) screen. The in-app button simply asks the
-   browser to go back; the actual app-state change happens in ONE place:
-   the popstate handler below. */
+/* Every "Back"/"Exit" action — the in-app button, the browser's own back button, and the
+   phone's hardware/gesture back — behave identically and predictably: each screen has exactly
+   ONE fixed parent it always returns to (see SCREEN_PARENT above), never a dynamic history
+   stack that can desync. Tab-root screens (Home, Challenge, Duels, Ranks, Chat, Fun, Guide)
+   have no parent — they're reached only via the bottom tab bar. */
 function mainHubScreen(){
   if(state.teacherAuthed) return 'teacherDashboard';
   if(state.studentCode) return 'studentHub';
   return 'roleSelect';
 }
 function goBack(){
-  try{ history.back(); }
-  catch(e){ popStateGoBack(); }
-}
-function popStateGoBack(){
-  clearChatPoll();
-  clearDuelTimer();
-  const hub = mainHubScreen();
-  if(state.screen === hub){
-    goRoleSelect();
-    return;
-  }
-  state.screen = hub;
-  state.history = [];
-  persistState();
-  render();
+  navigateTo(SCREEN_PARENT[state.screen] || mainHubScreen());
 }
 window.addEventListener('popstate', () => {
-  try{ history.pushState({ __appNav:true }, '', location.href); }catch(e){}
-  popStateGoBack();
+  clearChatPoll();
+  const target = SCREEN_PARENT[state.screen] || mainHubScreen();
+  state.screen = target;
+  persistState();
+  try{ history.pushState({ __appNav:true, screen: target }, '', location.href); }catch(e){}
+  render();
 });
 
 function render(){
@@ -1582,6 +1594,7 @@ function render(){
     setTimeout(render, 400);
     return;
   }
+  document.body.classList.toggle('has-bottom-nav', !!(state.studentCode && !state.teacherAuthed));
   const map = {
     roleSelect: renderRoleSelect,
     teacherLogin: renderTeacherLogin,
@@ -1620,16 +1633,56 @@ function render(){
   }
 }
 
+const STUDENT_TABS = [
+  { screen: 'studentHub',      icon: '🏠', label: 'Home' },
+  { screen: 'studentChallenge',icon: '📅', label: 'Challenge' },
+  { screen: 'duelList',        icon: '⚔️', label: 'Duels' },
+  { screen: 'standings',       icon: '🏅', label: 'Ranks' },
+  { screen: 'chatRoom',        icon: '💬', label: 'Chat' },
+  { screen: 'funZone',         icon: '🎮', label: 'Fun' },
+  { screen: 'helpGuide',       icon: '📖', label: 'Guide' },
+];
+// Deep sub-screens always exit to one fixed, predictable parent — never a dynamic history stack.
+const SCREEN_PARENT = {
+  studentCodeEntry: 'roleSelect',
+  teacherLogin: 'roleSelect',
+  duelCodeEntry: 'duelList',
+  duelPlay: 'duelList',
+  wordBlitz: 'funZone',
+  emojiRiddle: 'funZone',
+  speedTyping: 'funZone',
+  dailySpin: 'funZone',
+  movieSpin: 'funZone',
+  funZoneLeaderboard: 'funZone',
+  teacherDuels: 'teacherDashboard',
+  teacherMovieSpin: 'teacherDashboard',
+};
+function activeStudentTab(){
+  if(STUDENT_TABS.some(t => t.screen === state.screen)) return state.screen;
+  return SCREEN_PARENT[state.screen] || 'studentHub';
+}
+function bottomNavHtml(){
+  if(state.teacherAuthed || !state.studentCode) return '';
+  const active = activeStudentTab();
+  return `
+    <div class="bottom-nav">
+      ${STUDENT_TABS.map(t => `
+        <button class="bottom-nav-item ${t.screen===active?'active':''}" onclick="navigateTo('${t.screen}')">
+          <span class="bn-icon">${t.icon}</span><span class="bn-label">${t.label}</span>
+        </button>
+      `).join('')}
+    </div>
+  `;
+}
 function topbar(){
-  const showBack = state.screen !== 'roleSelect';
   return `
     <div class="topbar">
       <div class="brand">
         <div class="crest">🏆</div>
         <div><h1>The Academy</h1><div class="sub">English League</div></div>
       </div>
-      ${showBack ? `<button class="nav-link" onclick="goBack()">← Back</button>` : ''}
     </div>
+    ${bottomNavHtml()}
   `;
 }
 
@@ -2208,12 +2261,12 @@ async function showMyDailyAnswers(dateStr){
         <h2>📋 Your Answers</h2>
         <p class="muted" style="font-size:0.8rem;">${correctCount}/${sorted.length} correct</p>
         ${rowsHtml || '<p class="muted">No answers recorded for this day.</p>'}
-        <button class="btn btn-ghost" style="margin-top:14px;" onclick="goBack()">← Back</button>
+        <button class="btn btn-ghost" style="margin-top:14px;" onclick="navigateTo('studentChallenge')">← Back</button>
       </div>
     `;
   }catch(e){
     console.error('showMyDailyAnswers failed', e);
-    app.innerHTML = `${topbar()}<div class="card"><p class="muted center-note">Couldn't load your answers. Try again.</p></div><div style="margin-top:10px;"><button class="btn btn-ghost" onclick="goBack()">← Back</button></div>`;
+    app.innerHTML = `${topbar()}<div class="card"><p class="muted center-note">Couldn't load your answers. Try again.</p></div><div style="margin-top:10px;"><button class="btn btn-ghost" onclick="navigateTo('studentChallenge')">← Back</button></div>`;
   }
 }
 
@@ -2410,7 +2463,6 @@ function renderFunZone(){
         <button class="btn btn-primary" onclick="navigateTo('movieSpin')">🎬 Movie Night Spin — suggest a movie</button>
         <button class="btn btn-ghost" onclick="navigateTo('funZoneLeaderboard')">🏆 Fun Zone Leaderboard</button>
       </div>
-      <button class="btn btn-ghost" style="margin-top:14px;" onclick="goBack()">← Back</button>
     </div>
   `;
 }
@@ -2472,7 +2524,7 @@ async function renderFunZoneLeaderboard(){
    picture of the word) — e.g. 🔥+📥+🚦 = "flame"+"in"+"go" = Flamingo. */
 const EMOJI_RIDDLE_BANK = [
   { emojis: "🔥📥🚦", answer: "flamingo", hint: "flame + in + go" },
-  { emojis: "🐝🍃", answer: "believe", hint: "bee + leaf" },
+  { emojis: "🐝🍃", answer: "belief", hint: "bee + leaf" },
   { emojis: "👁️😱", answer: "icecream", hint: "eye + scream" },
   { emojis: "🚗🐾", answer: "carpet", hint: "car + pet" },
   { emojis: "🧑🚦", answer: "mango", hint: "man + go" },
@@ -3541,7 +3593,7 @@ async function showMyDuelAnswers(){
         <h2>📋 Your Answers</h2>
         <p class="muted" style="font-size:0.8rem;">${(myProgress||[]).length}/${keys.length} questions answered</p>
         ${rows}
-        <button class="btn btn-ghost" style="margin-top:14px;" onclick="goBack()">← Back to Result</button>
+        <button class="btn btn-ghost" style="margin-top:14px;" onclick="showDuelResult(__activeDuelForResult, __activeParticipantsForResult)">← Back to Result</button>
       </div>
     `;
   }catch(e){
