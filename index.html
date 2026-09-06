@@ -1559,8 +1559,12 @@ function clearChatPoll(){
   if(state.chatPollHandle){ clearInterval(state.chatPollHandle); state.chatPollHandle = null; }
   stopChatKeyboardWatcher();
 }
+function clearMolePoll(){
+  if(state.molePollHandle){ clearInterval(state.molePollHandle); state.molePollHandle = null; }
+}
 function navigateTo(screen){
   clearChatPoll();
+  clearMolePoll();
   state.screen = screen;
   persistState();
   try{ history.pushState({ __appNav:true, screen }, '', location.href); }catch(e){}
@@ -1581,6 +1585,7 @@ function goBack(){
 }
 window.addEventListener('popstate', () => {
   clearChatPoll();
+  clearMolePoll();
   const target = SCREEN_PARENT[state.screen] || mainHubScreen();
   state.screen = target;
   persistState();
@@ -1615,6 +1620,7 @@ function render(){
     speedTyping: renderSpeedTyping,
     dailySpin: renderDailySpin,
     movieSpin: renderMovieSpin,
+    moleZone: renderMoleZone,
     funZoneLeaderboard: renderFunZoneLeaderboard,
     helpGuide: renderHelpGuide,
     chatRoom: renderChatRoom,
@@ -1663,6 +1669,7 @@ const SCREEN_PARENT = {
   speedTyping: 'funZone',
   dailySpin: 'funZone',
   movieSpin: 'funZone',
+  moleZone: 'funZone',
   funZoneLeaderboard: 'funZone',
 };
 function currentTabSet(){
@@ -2010,7 +2017,54 @@ async function renderTeacherDashboard(){
     </div>
 
     ${insightsCardHtml(teamList, studentList, progressList, challenge)}
+    ${await moleTeacherCardHtml()}
   `;
+}
+async function moleTeacherCardHtml(){
+  const { data: round } = await supabaseClient.from('mole_rounds').select('*').order('id', { ascending:false }).limit(1);
+  const latest = (round||[])[0];
+  const active = latest && latest.status !== 'ended';
+  if(!active){
+    return `
+      <div class="card">
+        <span class="eyebrow">Fun Zone Event</span>
+        <h2>🕵️ The Mole</h2>
+        <p class="muted">Start a live round — everything after this runs automatically.</p>
+        <p class="muted" style="margin-bottom:4px;">Number of players</p>
+        <input type="number" id="molePlayerLimit" min="4" max="20" value="8" style="max-width:100px;">
+        <p class="muted" style="margin-bottom:4px;">Number of spies</p>
+        <input type="number" id="moleSpyCount" min="1" max="3" value="1" style="max-width:100px;">
+        <button class="btn btn-primary" onclick="startMoleRound()">🕵️ Start Mole Round</button>
+        <div id="moleStartResult"></div>
+      </div>
+    `;
+  }
+  const { data: participants } = await supabaseClient.from('mole_participants').select('*').eq('round_id', latest.id);
+  const count = (participants||[]).length;
+  const statusLabel = { waiting:'Waiting for players', writing:'Players are writing', discussion:'Discussion in progress', voting:'Voting in progress' }[latest.status] || latest.status;
+  return `
+    <div class="card">
+      <span class="eyebrow">Fun Zone Event — Live</span>
+      <h2>🕵️ The Mole</h2>
+      <p class="muted">Topic: "${escapeHtml(latest.topic)}"</p>
+      <span class="status-pill status-open">● ${escapeHtml(statusLabel)}</span>
+      <p class="muted" style="margin-top:8px;">${count}/${latest.participant_limit} joined · ${latest.spy_count} spy${latest.spy_count>1?'ies':''}</p>
+      <p class="muted" style="font-size:0.78rem; margin-top:6px;">This round is fully automatic — no action needed from you.</p>
+    </div>
+  `;
+}
+async function startMoleRound(){
+  const limit = parseInt(document.getElementById('molePlayerLimit').value, 10) || 8;
+  const spies = parseInt(document.getElementById('moleSpyCount').value, 10) || 1;
+  const resultEl = document.getElementById('moleStartResult');
+  if(spies >= limit){ resultEl.innerHTML = `<div class="feedback bad">Too many spies for that many players.</div>`; return; }
+  const topic = MOLE_TOPICS[Math.floor(Math.random() * MOLE_TOPICS.length)];
+  try{
+    await supabaseClient.from('mole_rounds').insert({ status:'waiting', topic, spy_count: spies, participant_limit: limit });
+    renderTeacherDashboard();
+  }catch(e){
+    resultEl.innerHTML = `<div class="feedback bad">Could not start the round. Try again.</div>`;
+  }
 }
 
 async function renderTeacherTeams(){
@@ -2464,6 +2518,7 @@ function renderFunZone(){
         <button class="btn btn-primary" onclick="navigateTo('speedTyping')">⏱️ Speed Typing — how fast can you type?</button>
         <button class="btn btn-primary" onclick="navigateTo('dailySpin')">🎁 Daily Spin — one free spin a day</button>
         <button class="btn btn-primary" onclick="navigateTo('movieSpin')">🎬 Movie Night Spin — suggest a movie</button>
+        <button class="btn btn-primary" onclick="navigateTo('moleZone')">🕵️ The Mole — find the spy!</button>
         <button class="btn btn-ghost" onclick="navigateTo('funZoneLeaderboard')">🏆 Fun Zone Leaderboard</button>
       </div>
     </div>
@@ -2520,6 +2575,369 @@ async function renderFunZoneLeaderboard(){
   }catch(e){
     app.innerHTML = `${topbar()}<div class="card"><p class="muted center-note">Couldn't load the leaderboard right now.</p><button class="btn btn-ghost" style="margin-top:10px;" onclick="goBack()">← Back to Fun Zone</button></div>`;
   }
+}
+
+/* ============================================================
+   THE MOLE — social-deduction mini-game.
+   Teacher only sets player count + spy count; everything else
+   (topic, roles, phase timers, reveal, scoring) is automatic.
+   ============================================================ */
+const MOLE_WRITING_SECONDS = 90;
+const MOLE_DISCUSSION_SECONDS = 300;
+const MOLE_VOTING_SECONDS = 60;
+const MOLE_TOPICS = [
+  "Describe your favorite hobby.",
+  "Talk about a place you visited.",
+  "Describe your favorite food.",
+  "Talk about your best friend.",
+  "Describe your dream job.",
+  "Talk about a movie you loved.",
+  "Describe your favorite season.",
+  "Talk about a skill you want to learn.",
+  "Describe your morning routine.",
+  "Talk about your favorite animal.",
+  "Describe a memorable trip.",
+  "Talk about your favorite sport.",
+];
+function moleFormatTime(sec){
+  const m = Math.floor(sec/60), s = sec%60;
+  return m > 0 ? `${m}:${String(s).padStart(2,'0')}` : `${s}s`;
+}
+
+async function renderMoleZone(){
+  clearMolePoll();
+  app.innerHTML = `${topbar()}<div class="card"><p class="muted center-note">Loading…</p></div>`;
+  await moleLoadAndRender(true);
+}
+
+async function moleLoadAndRender(forceFullRender){
+  try{
+    const { data: rounds } = await supabaseClient.from('mole_rounds').select('*').order('id', { ascending:false }).limit(1);
+    const round = (rounds||[])[0];
+    if(!round){
+      app.innerHTML = `
+        ${topbar()}
+        <div class="card" style="text-align:center;">
+          <span class="eyebrow">Fun Zone</span>
+          <h2>🕵️ The Mole</h2>
+          <p class="muted">No round right now — ask your teacher to start one!</p>
+          <button class="btn btn-ghost" style="margin-top:14px;" onclick="navigateTo('funZone')">← Back to Fun Zone</button>
+        </div>
+      `;
+      return;
+    }
+
+    const { data: participants } = await supabaseClient.from('mole_participants').select('*').eq('round_id', round.id);
+    const list = participants || [];
+
+    if(round.status !== 'ended'){
+      const advanced = await moleAutoAdvance(round, list);
+      if(advanced){ await moleLoadAndRender(true); return; }
+    }
+
+    const active = document.activeElement;
+    const typing = active && ['INPUT','TEXTAREA'].includes(active.tagName) && active.id && active.id.startsWith('mole') && document.getElementById('app').contains(active);
+
+    if(forceFullRender || !typing){
+      renderMolePhase(round, list);
+    } else if(round.status === 'discussion'){
+      moleLoadMessages(round.id); // keep the chat feed live even while the input is focused
+    }
+
+    if(round.status !== 'ended'){
+      clearMolePoll();
+      state.molePollHandle = setInterval(() => moleLoadAndRender(false), 3000);
+    }
+  }catch(e){
+    console.error('mole poll failed', e);
+    if(forceFullRender){
+      app.innerHTML = `${topbar()}<div class="card"><p class="muted center-note">Connection hiccup — retrying…</p></div>`;
+      state.molePollHandle = setTimeout(() => moleLoadAndRender(true), 1500);
+    }
+  }
+}
+
+function renderMolePhase(round, participants){
+  const me = participants.find(p => p.participant_code === state.studentCode);
+  if(round.status === 'waiting') return renderMoleWaiting(round, participants, me);
+  if(round.status === 'writing') return renderMoleWriting(round, participants, me);
+  if(round.status === 'discussion') return renderMoleDiscussion(round, participants, me);
+  if(round.status === 'voting') return renderMoleVoting(round, participants, me);
+  if(round.status === 'ended') return renderMoleEnded(round, participants, me);
+}
+
+function renderMoleWaiting(round, participants, me){
+  const count = participants.length;
+  const full = count >= round.participant_limit;
+  app.innerHTML = `
+    ${topbar()}
+    <div class="card" style="text-align:center;">
+      <span class="eyebrow">The Mole — Lobby</span>
+      <h2>🕵️ Waiting for Players</h2>
+      <p class="muted">Topic will be revealed once the round starts.</p>
+      <div style="font-family:var(--font-head); font-weight:800; font-size:1.4rem; margin:10px 0;">${count} / ${round.participant_limit}</div>
+      ${me
+        ? `<div class="feedback ok">✓ You're in! Waiting for more players…</div>`
+        : (full ? `<div class="feedback bad">This round is full.</div>` : `<button class="btn btn-primary" onclick="moleJoin(${round.id})">🕵️ Join This Round</button>`)}
+      <button class="btn btn-ghost" style="margin-top:14px;" onclick="navigateTo('funZone')">← Back to Fun Zone</button>
+    </div>
+  `;
+}
+async function moleJoin(roundId){
+  try{
+    await supabaseClient.from('mole_participants').insert({ round_id: roundId, participant_code: state.studentCode, participant_name: state.studentName });
+  }catch(e){ console.error('mole join failed', e); }
+  moleLoadAndRender(true);
+}
+
+function renderMoleWriting(round, participants, me){
+  const elapsed = Date.now() - new Date(round.writing_started_at).getTime();
+  const remaining = Math.max(0, MOLE_WRITING_SECONDS - Math.floor(elapsed/1000));
+  if(!me){
+    app.innerHTML = `
+      ${topbar()}
+      <div class="card" style="text-align:center;">
+        <span class="eyebrow">The Mole</span>
+        <h2>🕵️ Round in Progress</h2>
+        <p class="muted">This round already started without you — catch the next one!</p>
+        <button class="btn btn-ghost" style="margin-top:14px;" onclick="navigateTo('funZone')">← Back to Fun Zone</button>
+      </div>
+    `;
+    return;
+  }
+  const alreadyWrote = me.statement && me.statement.trim().length > 0;
+  app.innerHTML = `
+    ${topbar()}
+    <div class="card">
+      <span class="eyebrow">The Mole — Writing (⏱ ${remaining}s)</span>
+      <h2>${me.role === 'spy' ? '🕵️ You are the SPY!' : '👤 You are a Citizen'}</h2>
+      <p class="muted">${me.role === 'spy'
+        ? `Topic: "${escapeHtml(round.topic)}" — write a CONVINCING but FAKE answer. Don't get caught!`
+        : `Topic: "${escapeHtml(round.topic)}" — answer truthfully.`}</p>
+      ${alreadyWrote
+        ? `<div class="feedback ok">✓ Submitted! Waiting for everyone else…</div>`
+        : `<textarea id="moleStatementInput" rows="3" maxlength="200" placeholder="Write your answer in English…"></textarea><button class="btn btn-primary" id="moleSubmitBtn">Submit</button>`}
+    </div>
+  `;
+  if(!alreadyWrote){
+    document.getElementById('moleSubmitBtn').onclick = () => moleSubmitStatement(round.id);
+  }
+}
+async function moleSubmitStatement(roundId){
+  const ta = document.getElementById('moleStatementInput');
+  const text = ta.value.trim();
+  if(!text) return;
+  ta.disabled = true;
+  try{
+    await supabaseClient.from('mole_participants').update({ statement: text }).eq('round_id', roundId).eq('participant_code', state.studentCode);
+  }catch(e){ console.error('mole statement submit failed', e); }
+  moleLoadAndRender(true);
+}
+
+function renderMoleDiscussion(round, participants, me){
+  const elapsed = Date.now() - new Date(round.discussion_started_at).getTime();
+  const remaining = Math.max(0, MOLE_DISCUSSION_SECONDS - Math.floor(elapsed/1000));
+  const statements = participants.filter(p=>p.statement).map((p,i) => ({ n:i+1, text:p.statement }));
+  app.innerHTML = `
+    ${topbar()}
+    <div class="card">
+      <span class="eyebrow">The Mole — Discussion (⏱ ${moleFormatTime(remaining)})</span>
+      <h2>💬 Who's lying?</h2>
+      <p class="muted">Topic: "${escapeHtml(round.topic)}"</p>
+      <div style="margin:10px 0; display:flex; flex-direction:column; gap:6px;">
+        ${statements.map(s => `<div class="student-row"><span>#${s.n}</span><span style="text-align:right; max-width:75%;">${escapeHtml(s.text)}</span></div>`).join('')}
+      </div>
+      <div class="divider"></div>
+      <div id="moleMsgFeed" style="max-height:220px; overflow-y:auto; display:flex; flex-direction:column; gap:6px; margin-bottom:10px;"></div>
+      <div style="display:flex; gap:8px;">
+        <input type="text" id="moleMsgInput" placeholder="Discuss in English…" maxlength="200" style="margin-bottom:0;">
+        <button class="btn btn-primary" style="width:auto; padding:10px 16px;" id="moleMsgSendBtn">Send</button>
+      </div>
+    </div>
+  `;
+  moleLoadMessages(round.id);
+  document.getElementById('moleMsgSendBtn').onclick = () => moleSendMessage(round.id);
+  document.getElementById('moleMsgInput').addEventListener('keydown', e => { if(e.key==='Enter') moleSendMessage(round.id); });
+}
+async function moleLoadMessages(roundId){
+  try{
+    const { data } = await supabaseClient.from('mole_messages').select('*').eq('round_id', roundId).order('created_at', { ascending:true });
+    const feed = document.getElementById('moleMsgFeed');
+    if(!feed) return;
+    feed.innerHTML = (data||[]).map(m => `<div style="font-size:0.82rem;"><strong>${escapeHtml(m.sender_name)}:</strong> ${escapeHtml(m.body)}</div>`).join('') || '<p class="muted" style="font-size:0.8rem;">No messages yet — start the discussion!</p>';
+    feed.scrollTop = feed.scrollHeight;
+  }catch(e){ console.error('mole message load failed', e); }
+}
+async function moleSendMessage(roundId){
+  const input = document.getElementById('moleMsgInput');
+  const text = input.value.trim();
+  if(!text) return;
+  input.value = '';
+  try{
+    await supabaseClient.from('mole_messages').insert({ round_id: roundId, sender_code: state.studentCode, sender_name: state.studentName, body: text });
+  }catch(e){ console.error('mole message send failed', e); }
+  moleLoadMessages(roundId);
+}
+
+function renderMoleVoting(round, participants, me){
+  const elapsed = Date.now() - new Date(round.voting_started_at).getTime();
+  const remaining = Math.max(0, MOLE_VOTING_SECONDS - Math.floor(elapsed/1000));
+  if(!me){
+    app.innerHTML = `${topbar()}<div class="card" style="text-align:center;"><span class="eyebrow">The Mole</span><h2>🗳️ Voting in Progress</h2><p class="muted">You weren't part of this round.</p><button class="btn btn-ghost" style="margin-top:14px;" onclick="navigateTo('funZone')">← Back to Fun Zone</button></div>`;
+    return;
+  }
+  app.innerHTML = `
+    ${topbar()}
+    <div class="card">
+      <span class="eyebrow">The Mole — Voting (⏱ ${remaining}s)</span>
+      <h2>🗳️ Who is the spy?</h2>
+      <div id="moleVoteArea"></div>
+    </div>
+  `;
+  const area = document.getElementById('moleVoteArea');
+  participants.filter(p => p.participant_code !== state.studentCode).forEach(p => {
+    const b = document.createElement('button');
+    b.className = 'mc-option';
+    b.textContent = p.participant_name;
+    b.dataset.code = p.participant_code;
+    b.onclick = () => moleSubmitVote(round.id, p.participant_code, area);
+    area.appendChild(b);
+  });
+  moleCheckMyVote(round.id, area);
+}
+async function moleSubmitVote(roundId, targetCode, area){
+  area.querySelectorAll('.mc-option').forEach(el => el.disabled = true);
+  try{
+    await supabaseClient.from('mole_votes').insert({ round_id: roundId, voter_code: state.studentCode, target_code: targetCode });
+  }catch(e){ console.error('mole vote failed', e); }
+  moleLoadAndRender(true);
+}
+async function moleCheckMyVote(roundId, area){
+  try{
+    const { data: mine } = await supabaseClient.from('mole_votes').select('*').eq('round_id', roundId).eq('voter_code', state.studentCode).maybeSingle();
+    if(mine){
+      area.querySelectorAll('.mc-option').forEach(el => {
+        el.disabled = true;
+        if(el.dataset.code === mine.target_code) el.classList.add('correct');
+      });
+      area.insertAdjacentHTML('afterend', `<div class="feedback ok" style="margin-top:8px;">✓ Vote submitted. Waiting for everyone else…</div>`);
+    }
+  }catch(e){ /* not fatal */ }
+}
+
+async function moleAutoAdvance(round, participants){
+  const now = Date.now();
+  if(round.status === 'waiting'){
+    if(participants.length >= round.participant_limit && participants.length > 0){
+      const shuffled = [...participants].sort(() => Math.random() - 0.5);
+      const spyCodes = new Set(shuffled.slice(0, round.spy_count).map(p => p.participant_code));
+      for(const p of participants){
+        const role = spyCodes.has(p.participant_code) ? 'spy' : 'citizen';
+        try{ await supabaseClient.from('mole_participants').update({ role }).eq('round_id', round.id).eq('participant_code', p.participant_code); }catch(e){}
+      }
+      await supabaseClient.from('mole_rounds').update({ status:'writing', writing_started_at: new Date().toISOString() }).eq('id', round.id);
+      return true;
+    }
+    return false;
+  }
+  if(round.status === 'writing'){
+    const elapsed = now - new Date(round.writing_started_at).getTime();
+    const allWrote = participants.length > 0 && participants.every(p => p.statement && p.statement.trim().length > 0);
+    if(elapsed >= MOLE_WRITING_SECONDS*1000 || allWrote){
+      await supabaseClient.from('mole_rounds').update({ status:'discussion', discussion_started_at: new Date().toISOString() }).eq('id', round.id);
+      return true;
+    }
+    return false;
+  }
+  if(round.status === 'discussion'){
+    const elapsed = now - new Date(round.discussion_started_at).getTime();
+    if(elapsed >= MOLE_DISCUSSION_SECONDS*1000){
+      await supabaseClient.from('mole_rounds').update({ status:'voting', voting_started_at: new Date().toISOString() }).eq('id', round.id);
+      return true;
+    }
+    return false;
+  }
+  if(round.status === 'voting'){
+    const elapsed = now - new Date(round.voting_started_at).getTime();
+    const { data: votes } = await supabaseClient.from('mole_votes').select('*').eq('round_id', round.id);
+    const voteList = votes || [];
+    const allVoted = participants.length > 0 && voteList.length >= participants.length;
+    if(elapsed >= MOLE_VOTING_SECONDS*1000 || allVoted){
+      await moleFinishRound(round, participants, voteList);
+      return true;
+    }
+    return false;
+  }
+  return false;
+}
+
+async function moleAwardPoints(code, amount){
+  try{
+    const { data: codeRow } = await supabaseClient.from('student_codes').select('*').eq('code', code).maybeSingle();
+    if(codeRow && codeRow.team_name){
+      const { data: teamRow } = await supabaseClient.from('teams').select('*').eq('team_name', codeRow.team_name).maybeSingle();
+      if(teamRow){
+        await supabaseClient.from('teams').update({ total_score: teamRow.total_score + amount }).eq('team_name', codeRow.team_name);
+      }
+    }
+    const dateStr = todayStr();
+    const { data: existing } = await supabaseClient.from('daily_bonuses').select('*').eq('code', code).eq('challenge_date', dateStr).maybeSingle();
+    const row = existing || { code, challenge_date: dateStr, extra_questions:0, extra_wrongs:0, bonus_points:0 };
+    row.bonus_points = (row.bonus_points||0) + amount;
+    await supabaseClient.from('daily_bonuses').upsert(row, { onConflict:'code,challenge_date' });
+  }catch(e){ console.error('mole point award failed', e); }
+}
+
+async function moleFinishRound(round, participants, votes){
+  const tally = {};
+  votes.forEach(v => { tally[v.target_code] = (tally[v.target_code]||0) + 1; });
+  let topCode = null, topCount = -1, tie = false;
+  Object.entries(tally).forEach(([code,count]) => {
+    if(count > topCount){ topCount = count; topCode = code; tie = false; }
+    else if(count === topCount){ tie = true; }
+  });
+  const spyCodes = new Set(participants.filter(p => p.role === 'spy').map(p => p.participant_code));
+  const spiesCaught = !tie && topCode && spyCodes.has(topCode);
+
+  for(const p of participants){
+    let award = 0;
+    if(spiesCaught){
+      if(!spyCodes.has(p.participant_code)){
+        const myVote = votes.find(v => v.voter_code === p.participant_code);
+        if(myVote && spyCodes.has(myVote.target_code)) award = 15;
+      }
+    } else if(spyCodes.has(p.participant_code)){
+      award = 30;
+    }
+    if(award > 0) await moleAwardPoints(p.participant_code, award);
+  }
+
+  await supabaseClient.from('mole_rounds').update({ status:'ended', ended_at: new Date().toISOString(), spies_caught: spiesCaught }).eq('id', round.id);
+}
+
+function renderMoleEnded(round, participants, me){
+  const spies = participants.filter(p => p.role === 'spy');
+  const spyNames = spies.map(p => p.participant_name).join(', ');
+  if(round.spies_caught) celebrateWin('Spies Caught! 🕵️');
+  app.innerHTML = `
+    ${topbar()}
+    <div class="card">
+      <span class="eyebrow">The Mole — Results</span>
+      <h2>${round.spies_caught ? '🎉 Citizens Win!' : '🕵️ The Spy Escaped!'}</h2>
+      <p class="muted">Topic: "${escapeHtml(round.topic)}"</p>
+      <div class="feedback ${round.spies_caught?'ok':'bad'}">${round.spies_caught ? 'The spy was caught! Citizens who voted correctly earned bonus points.' : 'The spy blended in perfectly and earned bonus points!'}</div>
+      <p style="font-weight:700; margin-top:10px;">🕵️ Spy${spies.length>1?'ies':''}: ${escapeHtml(spyNames || '—')}</p>
+      <div class="divider"></div>
+      <h3>All Statements</h3>
+      ${participants.map(p => `
+        <div class="student-row">
+          <span>${escapeHtml(p.participant_name)} ${p.role==='spy' ? '🕵️' : ''}</span>
+          <span class="muted" style="font-size:0.8rem; text-align:right; max-width:60%;">${escapeHtml(p.statement || '—')}</span>
+        </div>
+      `).join('')}
+      <button class="btn btn-ghost" style="margin-top:14px;" onclick="navigateTo('funZone')">← Back to Fun Zone</button>
+    </div>
+  `;
 }
 
 /* ---------------- Emoji Riddle ---------------- */
@@ -4233,7 +4651,7 @@ async function endDuelManually(duelId, scores){
    BOOT — restore where the user left off on refresh
    ============================================================ */
 const TEACHER_ZONE_SCREENS = ['teacherDashboard','teacherTeams','teacherDuels','teacherMovieSpin','standings','helpGuide','chatRoom'];
-const STUDENT_ZONE_SCREENS = ['studentHub','studentChallenge','standings','duelCodeEntry','duelList','duelPlay','helpGuide','chatRoom','funZone','wordBlitz','emojiRiddle','speedTyping','dailySpin','movieSpin','funZoneLeaderboard'];
+const STUDENT_ZONE_SCREENS = ['studentHub','studentChallenge','standings','duelCodeEntry','duelList','duelPlay','helpGuide','chatRoom','funZone','wordBlitz','emojiRiddle','speedTyping','dailySpin','movieSpin','funZoneLeaderboard','moleZone'];
 
 async function boot(){
   try{ history.replaceState({ __appNav:true }, '', location.href); }catch(e){}
