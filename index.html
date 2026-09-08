@@ -1605,6 +1605,7 @@ function render(){
     teacherLogin: renderTeacherLogin,
     teacherDashboard: renderTeacherDashboard,
     studentCodeEntry: renderStudentCodeEntry,
+    workshopSignup: renderWorkshopSignup,
     studentHub: renderStudentHub,
     studentChallenge: renderStudentChallenge,
     standings: renderStandings,
@@ -1661,6 +1662,7 @@ const TEACHER_TABS = [
 // Deep sub-screens always exit to one fixed, predictable parent — never a dynamic history stack.
 const SCREEN_PARENT = {
   studentCodeEntry: 'roleSelect',
+  workshopSignup: 'studentCodeEntry',
   teacherLogin: 'roleSelect',
   duelCodeEntry: 'duelList',
   duelPlay: 'duelList',
@@ -2018,7 +2020,25 @@ async function renderTeacherDashboard(){
 
     ${insightsCardHtml(teamList, studentList, progressList, challenge)}
     ${await moleTeacherCardHtml()}
+    ${await workshopSignupCardHtml()}
   `;
+}
+async function workshopSignupCardHtml(){
+  const { data: settings } = await supabaseClient.from('signup_settings').select('*').eq('id',1).maybeSingle();
+  const open = settings ? settings.self_signup_open : false;
+  return `
+    <div class="card">
+      <span class="eyebrow">Workshop Mode</span>
+      <h2>🔓 Self Sign-Up</h2>
+      <p class="muted">Let workshop participants join with just their name — no codes, no manual setup. They're placed automatically into auto-created "Workshop Team" groups of 6.</p>
+      <span class="status-pill ${open ? 'status-open' : 'status-closed'}">${open ? '● OPEN — anyone can join now' : '● CLOSED'}</span>
+      <button class="btn ${open ? 'btn-danger' : 'btn-accent'}" style="margin-top:10px;" onclick="toggleSelfSignup(${!open})">${open ? '🔒 Close Sign-Up' : '🔓 Open Sign-Up'}</button>
+    </div>
+  `;
+}
+async function toggleSelfSignup(newValue){
+  await supabaseClient.from('signup_settings').upsert({ id:1, self_signup_open:newValue }, { onConflict:'id' });
+  renderTeacherDashboard();
 }
 async function moleTeacherCardHtml(){
   const { data: round } = await supabaseClient.from('mole_rounds').select('*').order('id', { ascending:false }).limit(1);
@@ -2228,13 +2248,18 @@ async function endChallenge(){
 }
 
 /* ---------------- Student: enter code ---------------- */
-function renderStudentCodeEntry(){
+async function renderStudentCodeEntry(){
   const hint = state.lastRole === 'student' && state.lastStudentCode ? `
     <div class="card role-card" onclick="quickContinueStudent()" style="border-color:var(--accent); background:var(--accent-dim);">
       <div class="icon">↩️</div>
       <div><h3>Continue as ${escapeHtml(state.lastStudentName||'Student')}</h3><p class="muted" style="margin:0;">Your last signed-in account</p></div>
     </div>
   ` : '';
+  let signupOpen = false;
+  try{
+    const { data: settings } = await supabaseClient.from('signup_settings').select('*').eq('id',1).maybeSingle();
+    signupOpen = settings ? !!settings.self_signup_open : false;
+  }catch(e){ /* not fatal */ }
   app.innerHTML = `
     ${topbar()}
     ${hint}
@@ -2245,12 +2270,83 @@ function renderStudentCodeEntry(){
       <input type="text" id="codeInput" placeholder="e.g. K7P2XQ" maxlength="6" style="text-transform:uppercase; letter-spacing:2px; font-weight:700; text-align:center; font-size:1.2rem;">
       <div id="codeError"></div>
       <button class="btn btn-primary" onclick="submitCode()">Continue</button>
+      ${signupOpen ? `<button class="btn btn-ghost" style="margin-top:10px;" onclick="navigateTo('workshopSignup')">🆕 New workshop participant? Join with just your name</button>` : ''}
     </div>
   `;
   const input = document.getElementById('codeInput');
   input.focus();
   input.addEventListener('input', () => { input.value = input.value.toUpperCase(); });
   input.addEventListener('keydown', e => { if(e.key==='Enter') submitCode(); });
+}
+
+function renderWorkshopSignup(){
+  app.innerHTML = `
+    ${topbar()}
+    <div class="card">
+      <span class="eyebrow">Workshop Sign-Up</span>
+      <h2>🆕 Join with just your name</h2>
+      <p class="muted">No code needed. Pick a name that isn't already taken by another participant.</p>
+      <input type="text" id="workshopNameInput" placeholder="Your full name" maxlength="40">
+      <div id="workshopSignupError"></div>
+      <button class="btn btn-primary" onclick="submitWorkshopSignup()">Join Now</button>
+      <button class="btn btn-ghost" style="margin-top:10px;" onclick="navigateTo('studentCodeEntry')">← I have a code instead</button>
+    </div>
+  `;
+  const input = document.getElementById('workshopNameInput');
+  input.focus();
+  input.addEventListener('keydown', e => { if(e.key==='Enter') submitWorkshopSignup(); });
+}
+
+async function getOrCreateWorkshopTeam(){
+  const { data: teams } = await supabaseClient.from('teams').select('*').order('created_at', { ascending:true });
+  const workshopTeams = (teams||[]).filter(t => /^Workshop Team \d+$/.test(t.team_name));
+  for(const t of workshopTeams){
+    const { data: members } = await supabaseClient.from('student_codes').select('code').eq('team_name', t.team_name);
+    if((members||[]).length < t.max_members) return t;
+  }
+  const nextNum = workshopTeams.length + 1;
+  const teamName = 'Workshop Team ' + nextNum;
+  const color = TEAM_COLORS[(nextNum - 1) % TEAM_COLORS.length];
+  await supabaseClient.from('teams').insert({ team_name: teamName, color, max_members: 6, total_score: 0, streak_days: 0 });
+  return { team_name: teamName, color, max_members: 6, total_score: 0, streak_days: 0 };
+}
+
+async function submitWorkshopSignup(){
+  const input = document.getElementById('workshopNameInput');
+  const errEl = document.getElementById('workshopSignupError');
+  const name = input.value.trim();
+  errEl.innerHTML = '';
+  if(!name) return;
+  try{
+    const { data: existing } = await supabaseClient.from('student_codes').select('student_name');
+    const taken = (existing||[]).some(s => (s.student_name||'').trim().toLowerCase() === name.toLowerCase());
+    if(taken){
+      errEl.innerHTML = `<div class="feedback bad">That name is already taken — try adding your father's name or a number (e.g. "${escapeHtml(name)} 2").</div>`;
+      return;
+    }
+    const team = await getOrCreateWorkshopTeam();
+    let code;
+    for(let attempt=0; attempt<5; attempt++){
+      code = generateCode();
+      const { data: clash } = await supabaseClient.from('student_codes').select('code').eq('code', code).maybeSingle();
+      if(!clash) break;
+    }
+    await supabaseClient.from('student_codes').insert({ code, student_name: name, team_name: team.team_name, xp_points:0, lifetime_correct:0, duel_wins:0 });
+
+    state.teacherAuthed = false;
+    state.team = team;
+    state.studentName = name;
+    state.studentCode = code;
+    state.studentXP = 0;
+    state.lastRole = 'student';
+    state.lastStudentCode = code;
+    state.lastStudentName = name;
+    persistState();
+    navigateTo('studentHub');
+  }catch(e){
+    console.error('workshop signup failed', e);
+    errEl.innerHTML = `<div class="feedback bad">Something went wrong. Try again.</div>`;
+  }
 }
 
 async function submitCode(){
