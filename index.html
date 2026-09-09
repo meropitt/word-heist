@@ -9,15 +9,16 @@
 <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
   :root{
-    --navy: #0f1b2d;
-    --navy-2: #16283f;
-    --paper: #f5f7fb;
+    --navy: #1e1b4b;
+    --navy-2: #312e81;
+    --paper: #f6f4fd;
     --card: #ffffff;
-    --ink: #101826;
-    --muted: #64748b;
-    --line: #e4e9f2;
-    --accent: #2563eb;
-    --accent-dim: #eef2ff;
+    --ink: #1e1b2e;
+    --muted: #6b7280;
+    --line: #ece8fb;
+    --accent: #7c3aed;
+    --accent-2: #4f46e5;
+    --accent-dim: #f1ecff;
     --gold: #eab308;
     --silver: #a3adc2;
     --bronze: #c2703d;
@@ -25,6 +26,10 @@
     --bad: #dc2626;
     --font-head: 'Manrope', sans-serif;
     --font-body: 'Inter', sans-serif;
+    --grad-primary: linear-gradient(135deg, #7c3aed 0%, #4f46e5 100%);
+    --grad-warm: linear-gradient(135deg, #f59e0b 0%, #ec4899 100%);
+    --shadow-card: 0 4px 18px rgba(49,29,129,0.07);
+    --shadow-pop: 0 10px 28px -8px rgba(76,29,149,0.35);
   }
   *{box-sizing:border-box;}
   body{
@@ -42,10 +47,10 @@
   }
   .brand{ display:flex; align-items:center; gap:10px; }
   .brand .crest{
-    width:34px; height:34px; border-radius:9px;
-    background: linear-gradient(135deg, var(--navy), var(--accent));
+    width:38px; height:38px; border-radius:12px;
+    background: var(--grad-primary); box-shadow: var(--shadow-pop);
     display:flex; align-items:center; justify-content:center;
-    font-size:1.1rem;
+    font-size:1.15rem;
   }
   .brand h1{ font-family: var(--font-head); font-size:1.05rem; margin:0; font-weight:800; }
   .brand .sub{ font-size:0.68rem; color:var(--muted); letter-spacing:0.5px; text-transform:uppercase; }
@@ -53,11 +58,27 @@
     font-size:0.78rem; color: var(--accent); font-weight:600; cursor:pointer;
     background:none; border:none; padding:6px 10px;
   }
+  .welcome-banner{
+    background: var(--grad-primary); border-radius: 20px; padding: 20px 20px 22px;
+    margin-bottom: 16px; color:#fff; box-shadow: var(--shadow-pop); position:relative; overflow:hidden;
+  }
+  .welcome-banner::after{
+    content:''; position:absolute; right:-30px; top:-30px; width:140px; height:140px; border-radius:50%;
+    background: rgba(255,255,255,0.10);
+  }
+  .welcome-banner::before{
+    content:''; position:absolute; left:-20px; bottom:-40px; width:100px; height:100px; border-radius:50%;
+    background: rgba(255,255,255,0.08);
+  }
+  .welcome-banner h2{ margin:0 0 3px; font-size:1.3rem; color:#fff; position:relative; }
+  .welcome-banner p{ margin:0; color:rgba(255,255,255,0.85); font-size:0.85rem; position:relative; }
+  .welcome-stats{ display:flex; gap:14px; margin-top:12px; position:relative; }
+  .welcome-stat{ background:rgba(255,255,255,0.16); border-radius:12px; padding:7px 12px; font-size:0.78rem; font-weight:700; }
 
   .card{
-    background: var(--card); border: 1px solid var(--line); border-radius: 14px;
+    background: var(--card); border: none; border-radius: 18px;
     padding: 20px 18px; margin-bottom: 14px;
-    box-shadow: 0 1px 2px rgba(16,24,38,0.04);
+    box-shadow: var(--shadow-card);
   }
   .eyebrow{
     font-size: 0.7rem; font-weight:700; letter-spacing: 1.2px; text-transform: uppercase;
@@ -70,22 +91,22 @@
 
   input[type=text], input[type=password], select{
     width:100%; font-family: var(--font-body); font-size:1rem;
-    padding: 12px 13px; border-radius: 8px; border: 1.5px solid var(--line);
-    background: #fff; color: var(--ink); margin-bottom: 10px;
+    padding: 12px 13px; border-radius: 12px; border: 1.5px solid var(--line);
+    background: var(--paper); color: var(--ink); margin-bottom: 10px;
   }
-  input:focus, select:focus{ outline:none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-dim); }
+  input:focus, select:focus{ outline:none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-dim); background:#fff; }
 
   .btn{
     font-family: var(--font-head); font-weight:700; font-size: 0.92rem;
-    padding: 13px 16px; border-radius: 9px; border:none; cursor:pointer;
+    padding: 13px 16px; border-radius: 14px; border:none; cursor:pointer;
     width:100%; transition: filter .15s ease, transform .1s ease;
   }
   .btn:active{ transform: scale(0.98); }
-  .btn-primary{ background: var(--navy); color:#fff; }
-  .btn-primary:hover{ filter:brightness(1.15); }
-  .btn-accent{ background: var(--accent); color:#fff; }
-  .btn-accent:hover{ filter:brightness(1.1); }
-  .btn-ghost{ background: #fff; border: 1.5px solid var(--line); color: var(--ink); }
+  .btn-primary{ background: var(--grad-primary); color:#fff; box-shadow: var(--shadow-pop); }
+  .btn-primary:hover{ filter:brightness(1.08); }
+  .btn-accent{ background: var(--grad-primary); color:#fff; box-shadow: var(--shadow-pop); }
+  .btn-accent:hover{ filter:brightness(1.08); }
+  .btn-ghost{ background: var(--accent-dim); border: none; color: var(--accent); }
   .btn-danger{ background:#fff; border:1.5px solid var(--bad); color:var(--bad); }
   .btn:disabled{ opacity:0.4; cursor:not-allowed; }
   .btn-row{ display:flex; gap:10px; }
@@ -93,10 +114,29 @@
 
   .role-card{
     display:flex; align-items:center; gap:14px; cursor:pointer;
-    padding: 18px; margin-bottom:12px;
+    padding: 16px 18px; margin-bottom:12px; transition: transform .12s ease, box-shadow .12s ease;
   }
-  .role-card .icon{ font-size:1.8rem; }
-  .role-card:hover{ border-color: var(--accent); }
+  .role-card:active{ transform: scale(0.98); }
+  .role-card .icon{
+    font-size:1.5rem; width:48px; height:48px; border-radius:14px; flex-shrink:0;
+    display:flex; align-items:center; justify-content:center;
+    background: var(--accent-dim);
+  }
+  .role-card:hover{ box-shadow: var(--shadow-pop); }
+
+  .hub-grid{ display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:14px; }
+  .hub-tile{
+    background:var(--card); border-radius:18px; padding:18px 14px; text-align:center;
+    box-shadow: var(--shadow-card); cursor:pointer; transition: transform .12s ease, box-shadow .12s ease;
+  }
+  .hub-tile:active{ transform: scale(0.96); }
+  .hub-tile .hub-tile-icon{
+    width:52px; height:52px; border-radius:16px; margin:0 auto 10px; display:flex; align-items:center; justify-content:center;
+    font-size:1.5rem; background: var(--grad-primary); box-shadow: var(--shadow-pop);
+  }
+  .hub-tile.alt .hub-tile-icon{ background: var(--grad-warm); }
+  .hub-tile .hub-tile-label{ font-family:var(--font-head); font-weight:800; font-size:0.86rem; margin-bottom:2px; }
+  .hub-tile .hub-tile-sub{ font-size:0.68rem; color:var(--muted); }
 
   .team-swatch{
     width:22px; height:22px; border-radius:6px; display:inline-block; margin-right:8px; vertical-align:middle;
@@ -129,18 +169,20 @@
 
   .mc-option{
     display:block; width:100%; text-align:left;
-    background: #fff; border: 1.5px solid var(--line); border-radius: 9px;
+    background: #fff; border: 1.5px solid var(--line); border-radius: 14px;
     padding: 13px 15px; margin-bottom: 9px; cursor:pointer;
     font-family: var(--font-body); font-size: 0.95rem; color: var(--ink);
+    transition: border-color .12s ease, transform .1s ease;
   }
   .mc-option:hover{ border-color: var(--accent); }
+  .mc-option:active{ transform: scale(0.99); }
   .mc-option.correct{ border-color: var(--ok); background: #f0fdf4; }
   .mc-option.wrong{ border-color: var(--bad); background: #fef2f2; }
   .mc-option:disabled{ pointer-events:none; }
 
   .feedback{
     font-size: 0.88rem; font-weight:600;
-    padding: 11px 13px; border-radius: 9px; margin: 8px 0 4px;
+    padding: 11px 13px; border-radius: 12px; margin: 8px 0 4px;
   }
   .feedback.ok{ background: #f0fdf4; color: var(--ok); }
   .feedback.bad{ background: #fef2f2; color: var(--bad); }
@@ -380,9 +422,9 @@
   .pill-input-row .btn{ flex:0 0 auto; width:auto; white-space:nowrap; border-radius:22px; padding:12px 20px; }
   .chat-send-btn{
     flex-shrink:0; width:44px; height:44px; border-radius:50%; border:none;
-    background: linear-gradient(150deg, var(--accent), #4f46e5);
+    background: var(--grad-primary);
     color:#fff; font-size:1.05rem; cursor:pointer; display:flex; align-items:center; justify-content:center;
-    box-shadow: 0 4px 12px rgba(37,99,235,0.35);
+    box-shadow: var(--shadow-pop);
     transition: transform .1s ease, filter .15s ease, opacity .15s ease;
   }
   .chat-send-btn:hover{ filter:brightness(1.08); }
@@ -402,11 +444,12 @@
   .bottom-nav-item{
     flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:2px;
     background:none; border:none; cursor:pointer; color:var(--muted);
-    padding:5px 1px; border-radius:10px; min-width:0; -webkit-tap-highlight-color:transparent;
+    padding:5px 1px; border-radius:12px; min-width:0; -webkit-tap-highlight-color:transparent;
+    transition: background .15s ease, color .15s ease;
   }
   .bottom-nav-item .bn-icon{ font-size:1.15rem; line-height:1; }
   .bottom-nav-item .bn-label{ font-size:0.58rem; font-weight:700; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:100%; margin-top:1px; }
-  .bottom-nav-item.active{ color:var(--accent); }
+  .bottom-nav-item.active{ color:var(--accent); background: var(--accent-dim); }
   .bottom-nav-item.active .bn-icon{ transform:scale(1.12); }
   body.has-bottom-nav{ padding-bottom:70px; }
 </style>
@@ -1857,45 +1900,61 @@ function goDuels(){ navigateTo('duelList'); }
 function goRoleSelect(){ state.screen='roleSelect'; state.history=[]; persistState(); try{ history.pushState({ __appNav:true }, '', location.href); }catch(e){} render(); }
 
 /* ---------------- Student hub (after code entry) ---------------- */
+function greetingWord(){
+  const h = new Date().getHours();
+  return h < 12 ? 'صباح الخير' : 'مساء الخير';
+}
+
 function renderStudentHub(){
+  const level = levelForXP(state.studentXP||0);
   app.innerHTML = `
     ${topbar()}
-    <div style="text-align:right; margin-bottom:10px;">
+    <div style="text-align:right; margin-bottom:6px;">
       <button class="nav-link" onclick="studentLogout()">Log out</button>
     </div>
-    <div class="card">
-      <div style="display:flex; align-items:center; gap:10px; margin-bottom:6px;">
-        <div class="crest-circle" style="background:${state.team.color}">${teamInitials(state.team.team_name)}</div>
-        <div><h2 style="margin:0;">${escapeHtml(state.studentName)}</h2><p class="muted" style="margin:0;">${escapeHtml(state.team.team_name)}</p></div>
+    <div class="welcome-banner">
+      <h2>${greetingWord()}, ${escapeHtml(state.studentName)}! 👋</h2>
+      <p>${escapeHtml(state.team.team_name)} · Lv.${level.level} ${escapeHtml(level.title)}</p>
+      <div class="welcome-stats">
+        <div class="welcome-stat">⭐ ${state.studentXP||0} XP</div>
+        <div class="welcome-stat">🏆 ${state.team.total_score||0} pts</div>
       </div>
     </div>
-    <div class="card role-card" onclick="navigateTo('studentChallenge')">
-      <div class="icon">📅</div>
-      <div><h3>Today's Challenge</h3><p class="muted" style="margin:0;">30 daily questions, adaptive difficulty.</p></div>
-    </div>
-    <div class="card role-card" onclick="navigateTo('funZone')">
-      <div class="icon">🎉</div>
-      <div><h3>Fun Zone</h3><p class="muted" style="margin:0;">Word games — just for fun, anytime.</p></div>
+    <div class="hub-grid">
+      <div class="hub-tile" onclick="navigateTo('studentChallenge')">
+        <div class="hub-tile-icon">📅</div>
+        <div class="hub-tile-label">Today's Challenge</div>
+        <div class="hub-tile-sub">30 questions</div>
+      </div>
+      <div class="hub-tile alt" onclick="goDuels()">
+        <div class="hub-tile-icon">⚔️</div>
+        <div class="hub-tile-label">Duels</div>
+        <div class="hub-tile-sub">Team or 1v1</div>
+      </div>
+      <div class="hub-tile" onclick="goStandings()">
+        <div class="hub-tile-icon">🏅</div>
+        <div class="hub-tile-label">Standings</div>
+        <div class="hub-tile-sub">Leaderboard</div>
+      </div>
+      <div class="hub-tile alt" onclick="navigateTo('chatRoom')">
+        <div class="hub-tile-icon">💬</div>
+        <div class="hub-tile-label">Class Chat</div>
+        <div class="hub-tile-sub">Talk &amp; react</div>
+      </div>
+      <div class="hub-tile" onclick="navigateTo('funZone')">
+        <div class="hub-tile-icon">🎮</div>
+        <div class="hub-tile-label">Fun Zone</div>
+        <div class="hub-tile-sub">Games &amp; The Mole</div>
+      </div>
+      <div class="hub-tile alt" onclick="navigateTo('helpGuide')">
+        <div class="hub-tile-icon">📖</div>
+        <div class="hub-tile-label">Guide</div>
+        <div class="hub-tile-sub">Levels &amp; badges</div>
+      </div>
     </div>
     <div class="card role-card" onclick="navigateTo('movieSpin')">
       <div class="icon">🎬</div>
       <div><h3>Movie Night Spin</h3><p class="muted" style="margin:0;">Suggest a movie and see when your teacher spins for a winner.</p></div>
-    </div>
-    <div class="card role-card" onclick="goDuels()">
-      <div class="icon">⚔️</div>
-      <div><h3>Challenges</h3><p class="muted" style="margin:0;">Head-to-head duels between teams or players.</p></div>
-    </div>
-    <div class="card role-card" onclick="goStandings()">
-      <div class="icon">🏅</div>
-      <div><h3>Standings</h3><p class="muted" style="margin:0;">League table and leaderboards.</p></div>
-    </div>
-    <div class="card role-card" onclick="navigateTo('chatRoom')">
-      <div class="icon">💬</div>
-      <div><h3>Class Chat</h3><p class="muted" style="margin:0;">Talk with your classmates and teacher.</p></div>
-    </div>
-    <div class="card role-card" onclick="navigateTo('helpGuide')">
-      <div class="icon">📖</div>
-      <div><h3>Levels, Badges &amp; Titles</h3><p class="muted" style="margin:0;">See how they work and how to earn them.</p></div>
     </div>
   `;
 }
@@ -2002,8 +2061,15 @@ async function renderTeacherDashboard(){
 
   app.innerHTML = `
     ${topbar()}
-    <div style="text-align:right; margin-bottom:10px;">
+    <div style="text-align:right; margin-bottom:6px;">
       <button class="nav-link" onclick="teacherLogout()">Log out</button>
+    </div>
+    <div class="welcome-banner">
+      <h2>${greetingWord()}, Teacher! 👋</h2>
+      <p>Day #${challenge.day_index + 1} · ${teamList.length} team${teamList.length!==1?'s':''} · ${studentList.length} student${studentList.length!==1?'s':''}</p>
+      <div class="welcome-stats">
+        <div class="welcome-stat">${isOpenToday ? '● Challenge Open' : '○ Challenge Closed'}</div>
+      </div>
     </div>
 
     <div class="card">
